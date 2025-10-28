@@ -1,0 +1,331 @@
+name: Deploy K3s Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - create
+          - destroy
+
+env:
+  TF_VERSION: '1.6.0'
+
+jobs:
+  terraform:
+    name: Terraform ${{ inputs.action }} - ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    defaults:
+      run:
+        working-directory: ./terraform
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      
+      - name: Create SSH key files
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
+          chmod 600 ~/.ssh/id_ed25519
+          chmod 644 ~/.ssh/id_ed25519.pub
+  
+      - name: Terraform Init
+        run: terraform init
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      
+      - name: Terraform Validate
+        run: terraform validate
+      
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file="environments/${{ inputs.environment }}.tfvars" \
+            -var="hcloud_token=${{ secrets.HCLOUD_TOKEN }}" \
+            -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
+            -var="ssh_private_key=${{ secrets.SSH_PRIVATE_KEY }}" \
+            -out=tfplan
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      
+      - name: Terraform Apply
+        if: inputs.action == 'create'
+        run: terraform apply -auto-approve tfplan
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      
+      - name: Save Terraform outputs
+        if: inputs.action == 'create'
+        id: tf_outputs
+        run: |
+          echo "control_plane_ip=$(terraform output -raw control_plane_ip)" >> $GITHUB_OUTPUT
+          echo "cluster_endpoint=$(terraform output -raw cluster_endpoint)" >> $GITHUB_OUTPUT
+          terraform output -json > outputs.json
+            
+      - name: Fetch kubeconfig
+        if: inputs.action == 'create'
+        run: |
+          CONTROL_IP="${{ steps.tf_outputs.outputs.control_plane_ip }}"
+          
+          # Wait for SSH to be available
+          echo "Waiting for SSH on $CONTROL_IP..."
+          for i in {1..60}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/.ssh/id_ed25519 root@$CONTROL_IP "echo 'SSH ready'" 2>/dev/null; then
+              echo "SSH connection successful!"
+              break
+            fi
+            echo "Attempt $i/60: SSH not ready yet, waiting..."
+            sleep 10
+          done
+          
+          # Fetch kubeconfig
+          echo "Fetching kubeconfig from $CONTROL_IP..."
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_ed25519 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > kubeconfig-temp.yaml
+          
+          # Replace localhost with actual IP
+          sed "s/127.0.0.1/$CONTROL_IP/g" kubeconfig-temp.yaml > kubeconfig.yaml
+          
+          echo "Kubeconfig fetched successfully!"
+          chmod 600 kubeconfig.yaml
+      
+      - name: Upload kubeconfig
+        if: inputs.action == 'create'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig-${{ inputs.environment }}
+          path: ./terraform/kubeconfig.yaml
+          retention-days: 90
+      
+      - name: Verify cluster
+        if: inputs.action == 'create'
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Cluster Info ==="
+          kubectl cluster-info
+          
+          echo -e "\n=== Nodes ==="
+          kubectl get nodes -o wide
+          
+          echo -e "\n=== System Pods ==="
+          kubectl get pods -A
+      
+      - name: Terraform Destroy
+        if: inputs.action == 'destroy'
+        run: |
+          terraform destroy -auto-approve \
+            -var-file="environments/${{ inputs.environment }}.tfvars" \
+            -var="hcloud_token=${{ secrets.HCLOUD_TOKEN }}" \
+            -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
+            -var="ssh_private_key=${{ secrets.SSH_PRIVATE_KEY }}"
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.action }}" == "create" ] && [ "${{ job.status }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Cluster Access" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "# Download kubeconfig from artifacts" >> $GITHUB_STEP_SUMMARY
+            echo "kubectl --kubeconfig=kubeconfig.yaml get nodes" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 💡 To Destroy Cluster" >> $GITHUB_STEP_SUMMARY
+            echo "Just delete the VMs directly in Hetzner Cloud Console - much faster than Terraform destroy!" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ inputs.action }}" == "destroy" ] && [ "${{ job.status }}" == "success" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🧹 Cleanup Complete" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Infrastructure destroyed via Terraform" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  post-setup:
+    name: Install Strimzi and Configure Cluster
+    needs: terraform
+    if: inputs.action == 'create'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download kubeconfig
+        uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig-${{ inputs.environment }}
+          path: .
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.30.0'
+      
+      - name: Install Strimzi Operator
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Creating kafka namespace ==="
+          kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
+          
+          echo "=== Installing Strimzi Operator ==="
+          kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
+          
+          echo "=== Waiting for Strimzi Operator to be ready ==="
+          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s
+          
+          echo "=== Strimzi Operator installed successfully ==="
+          kubectl get pods -n kafka
+      
+      - name: Apply Kafka Cluster
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Applying Kafka cluster configuration ==="
+          kubectl apply -k kubernetes/overlays/${{ inputs.environment }}/kafka
+          
+          echo "=== Waiting for Kafka cluster to be ready (this may take a few minutes) ==="
+          kubectl wait kafka/trading-cluster --for=condition=Ready --timeout=600s -n kafka || true
+          
+          echo "=== Kafka cluster status ==="
+          kubectl get kafka -n kafka
+          kubectl get pods -n kafka
+      
+      - name: Create application namespaces
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Creating application namespaces ==="
+          kubectl create namespace ingestion --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace strategies --dry-run=client -o yaml | kubectl apply -f -
+          
+          echo "=== Namespaces created ==="
+          kubectl get namespaces
+      
+      - name: Install ArgoCD
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Creating argocd namespace ==="
+          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+          
+          echo "=== Installing ArgoCD ==="
+          kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
+          
+          echo "=== Waiting for ArgoCD to be ready ==="
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s
+          
+          echo "=== ArgoCD installed successfully ==="
+          kubectl get pods -n argocd
+      
+      - name: Configure ArgoCD Repository Access
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          # Determine branch based on environment
+          if [ "${{ inputs.environment }}" == "dev" ]; then
+            BRANCH="main"
+          else
+            BRANCH="production"
+          fi
+          
+          echo "=== Configuring ArgoCD for environment: ${{ inputs.environment }} (branch: ${BRANCH}) ==="
+          
+          # Deploy parent app-of-apps application
+          cat <<EOF | kubectl apply -f -
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: trading-system-${{ inputs.environment }}
+            namespace: argocd
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
+          spec:
+            project: default
+            source:
+              repoURL: 'https://github.com/trading-cz/infra.git'
+              targetRevision: ${BRANCH}
+              path: kubernetes/app-of-apps/overlays/${{ inputs.environment }}
+            destination:
+              server: 'https://kubernetes.default.svc'
+              namespace: default
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+          EOF
+          
+          echo "=== ArgoCD application created ==="
+          kubectl get applications -n argocd
+      
+      - name: Wait for ArgoCD Sync
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Waiting for ArgoCD to sync applications ==="
+          sleep 30
+          
+          echo "=== ArgoCD Application Status ==="
+          kubectl get applications -n argocd
+          
+          echo "=== All Pods ==="
+          kubectl get pods -A
+      
+      - name: Cluster Ready Summary
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "## 🎉 Cluster Ready!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Environment: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installed Components" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ K3s Cluster (1 control + 3 kafka workers)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Strimzi Operator" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Kafka KRaft Cluster (3 brokers)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ ArgoCD (GitOps)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Application namespaces (ingestion, strategies)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ArgoCD Configuration" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.environment }}" == "dev" ]; then
+            echo "- Branch: \`main\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Branch: \`production\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- Auto-sync: ✅ Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "- Self-heal: ✅ Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. ArgoCD will automatically deploy apps from Git" >> $GITHUB_STEP_SUMMARY
+          echo "2. Push changes to your branch to trigger updates" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor: \`kubectl get applications -n argocd\`" >> $GITHUB_STEP_SUMMARY
