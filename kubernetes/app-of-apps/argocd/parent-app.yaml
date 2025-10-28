@@ -1,0 +1,79 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: trading-system
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  # Source: This repository
+  source:
+    repoURL: 'https://github.com/trading-cz/infra.git'
+    targetRevision: main
+    path: kubernetes/app-of-apps/overlays/dev  # Change to 'prod' for production
+  
+  # Destination: Current cluster
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: default
+  
+  # Sync policy: Automatic with self-healing
+  syncPolicy:
+    automated:
+      prune: true        # Remove resources when removed from Git
+      selfHeal: true     # Automatically sync if cluster state drifts
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore differences that don't matter
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # Ignore replica count changes (HPA may modify)
+
+---
+# Optional: ArgoCD AppProject for better organization
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: trading-system-project
+  namespace: argocd
+spec:
+  description: Trading System Applications
+  
+  # Allow apps to deploy to these namespaces
+  destinations:
+    - namespace: kafka
+      server: 'https://kubernetes.default.svc'
+    - namespace: ingestion
+      server: 'https://kubernetes.default.svc'
+    - namespace: strategies
+      server: 'https://kubernetes.default.svc'
+    - namespace: monitoring
+      server: 'https://kubernetes.default.svc'
+    - namespace: default
+      server: 'https://kubernetes.default.svc'
+  
+  # Source repositories
+  sourceRepos:
+    - 'https://github.com/trading-cz/infra.git'
+  
+  # Cluster-level resources that apps can manage
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRole
+    - group: 'rbac.authorization.k8s.io'
+      kind: ClusterRoleBinding

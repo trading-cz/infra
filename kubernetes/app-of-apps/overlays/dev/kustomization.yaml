@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# DEV Environment - App of Apps
+# Deploys all applications with dev-specific settings
+
+resources:
+  # Use environment-specific overlays directly
+  - ../../../overlays/dev/kafka
+  - ../../../overlays/dev/apps
+
+commonLabels:
+  environment: dev
+  deployment-method: app-of-apps
