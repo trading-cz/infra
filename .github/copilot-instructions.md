@@ -41,3 +41,9 @@ Configuration in `kubernetes/overlays/{dev|prod}/` overrides base configs in `ku
 ## Documentation
 - `README.md`: Quick start guide
 - `ARCHITECTURE_FINAL_CLEAN.md`: Full architecture and design decisions
+
+## Troubleshooting & Recent Context
+- **Local Terraform Usage**: You can use a local Terraform executable (e.g., `terraform.exe validate`) to check configuration before pushing changes. Example:
+	- `C:\projects\apps\terraform_1.13.4\terraform.exe validate`
+
+- **CI/CD Validation**: All infrastructure changes are validated and deployed via GitHub Actions. Local validation is optional but recommended for troubleshooting.

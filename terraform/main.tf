@@ -190,7 +190,7 @@ resource "hcloud_server" "kafka_nodes" {
   user_data = templatefile("${path.module}/templates/worker-init.sh", {
     k3s_version    = var.k3s_version
     k3s_token      = local.k3s_token
-    k3s_url        = "https://${hcloud_server.control_plane.network[0].ip}:6443"
+    k3s_url        = "https://${element([for n in hcloud_server.control_plane.network : n.ip], 0)}:6443"
     node_ip        = "10.0.1.${20 + count.index}"
     node_label     = "node-role.kubernetes.io/kafka=true"
   })

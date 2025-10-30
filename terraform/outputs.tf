@@ -5,7 +5,7 @@ output "control_plane_ip" {
 
 output "control_plane_private_ip" {
   description = "Private IP of the control plane server"
-  value       = hcloud_server.control_plane.network[0].ip
+  value       = element([for n in hcloud_server.control_plane.network : n.ip], 0)
 }
 
 output "kafka_nodes_public_ips" {
@@ -15,7 +15,7 @@ output "kafka_nodes_public_ips" {
 
 output "kafka_nodes_private_ips" {
   description = "Private IPs of Kafka nodes"
-  value       = hcloud_server.kafka_nodes[*].network[0].ip
+  value       = [for s in hcloud_server.kafka_nodes : element([for n in s.network : n.ip], 0)]
 }
 
 output "k3s_token" {
