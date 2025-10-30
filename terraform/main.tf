@@ -209,8 +209,3 @@ resource "null_resource" "wait_for_k3s" {
   }
 }
 
-output "k3s_token" {
-  description = "The K3s cluster token (sensitive)."
-  value       = local.k3s_token
-  sensitive   = true
-}
