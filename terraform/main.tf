@@ -150,6 +150,7 @@ resource "hcloud_server" "control_plane" {
     k3s_version = var.k3s_version
     k3s_token   = local.k3s_token
     node_ip     = "10.0.1.10"
+    environment = var.environment
   })
 }
 

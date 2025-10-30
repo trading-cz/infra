@@ -2,7 +2,7 @@
 set -e
 
 echo "=== K3s Control Plane Initialization ==="
-echo "Environment: ${var.environment}"
+echo "Environment: ${environment}"
 echo "Node IP: ${node_ip}"
 
 # Update system
