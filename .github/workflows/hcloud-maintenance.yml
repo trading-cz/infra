@@ -1,0 +1,116 @@
+name: hcloud-maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment to target (dev|prod)"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, prod]
+      action:
+        description: "Action to perform"
+        required: true
+        default: "list"
+        type: choice
+        options: [list, destroy]
+
+jobs:
+  hcloud:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install hcloud CLI
+        uses: hetznercloud/setup-hcloud@v1
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+
+      # ---------- LIST ----------
+      - name: List all resources by env
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV="${{ inputs.env }}"
+
+          echo "== Servers =="
+          # Use flat column key 'ipv4' (not public_net.ipv4)
+          hcloud server list -l environment="$ENV" -o columns=id,name,ipv4,labels
+
+          echo
+          echo "== Volumes =="
+          hcloud volume list -l environment="$ENV" -o columns=id,name,size,labels || true
+
+          echo
+          echo "== Load Balancers =="
+          hcloud load-balancer list -l environment="$ENV" -o columns=id,name,labels || true
+
+          echo
+          echo "== Floating IPs =="
+          hcloud floating-ip list -l environment="$ENV" -o columns=id,description,ip,labels || true
+
+      # ---------- DESTROY ----------
+      - name: Destroy ALL resources by env
+        if: ${{ inputs.action == 'destroy' }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV="${{ inputs.env }}"
+
+          # ------------------------
+          # 1) Delete servers first
+          # ------------------------
+          mapfile -t SRVS < <(
+            hcloud server list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d'
+          )
+          if [ ${#SRVS[@]} -gt 0 ]; then
+            echo "Deleting ${#SRVS[@]} servers..."
+            hcloud server delete "${SRVS[@]}"
+          else
+            echo "No servers found."
+          fi
+
+          # ------------------------
+          # 2) Delete volumes
+          # ------------------------
+          mapfile -t VOLS < <(
+            hcloud volume list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d' || true
+          )
+          if [ ${#VOLS[@]} -gt 0 ]; then
+            echo "Deleting ${#VOLS[@]} volumes..."
+            hcloud volume delete "${VOLS[@]}"
+          else
+            echo "No volumes found."
+          fi
+
+          # ------------------------
+          # 3) Delete load balancers
+          # ------------------------
+          mapfile -t LBS < <(
+            hcloud load-balancer list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d' || true
+          )
+          if [ ${#LBS[@]} -gt 0 ]; then
+            echo "Deleting ${#LBS[@]} load balancers..."
+            hcloud load-balancer delete "${LBS[@]}"
+          else
+            echo "No load balancers found."
+          fi
+
+          # ------------------------
+          # 4) Delete floating IPs
+          # ------------------------
+          mapfile -t FIPS < <(
+            hcloud floating-ip list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d' || true
+          )
+          if [ ${#FIPS[@]} -gt 0 ]; then
+            echo "Deleting ${#FIPS[@]} floating IPs..."
+            hcloud floating-ip delete "${FIPS[@]}"
+          else
+            echo "No floating IPs found."
+          fi
