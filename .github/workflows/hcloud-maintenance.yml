@@ -26,7 +26,7 @@ jobs:
         if: ${{ inputs.action == 'list' }}
         run: |
           echo "== Servers =="
-          hcloud server list -l environment=${{ inputs.env }} -o columns=id,name,public_net.ipv4,labels
+          hcloud server list -l environment=${{ inputs.env }} -o columns=id,name,ipv4,labels
           echo
           echo "== Volumes =="
           hcloud volume list -l environment=${{ inputs.env }} -o columns=id,name,size,labels || true
