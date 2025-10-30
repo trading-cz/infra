@@ -28,7 +28,6 @@ jobs:
 
       # ---------- LIST ----------
       - name: List all resources by env
-        if: ${{ inputs.action == 'list' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
