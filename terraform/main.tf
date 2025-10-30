@@ -1,3 +1,7 @@
+provider "hcloud" {
+  token = var.hcloud_token
+}
+
 module "k3s" {
   source                     = "./modules/k3s"
   environment                = var.environment
