@@ -9,7 +9,7 @@ resource "random_password" "k3s_token" {
 }
 
 locals {
-  k3s_token = var.k3s_token != "" ? var.k3s_token : random_password.k3s_token.result
+  k3s_token = var.k3s_token != "" ? var.k3s_token : sensitive(random_password.k3s_token.result)
   
   # Common labels
   common_labels = {
