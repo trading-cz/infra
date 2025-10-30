@@ -75,4 +75,3 @@ jobs:
             echo "Deleting ${#FIPS[@]} floating IPs..."
             hcloud floating-ip delete "${FIPS[@]}"
           fi
-``
