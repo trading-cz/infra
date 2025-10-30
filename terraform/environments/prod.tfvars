@@ -9,7 +9,7 @@ kafka_server_type         = "cpx31"  # 4 vCPU, 8GB RAM
 kafka_node_count          = 3        # KRaft quorum
 
 # K3s version
-k3s_version = "v1.30.5+k3s1"
+k3s_version = "v1.34.1+k3s1"
 
 # Network settings
 network_zone    = "eu-central"

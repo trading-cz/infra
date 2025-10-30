@@ -4,12 +4,12 @@ cluster_name  = "k3s-trading"
 location      = "nbg1"
 
 # Development instances
-control_plane_server_type = "cx22"  # 2 vCPU, 4GB RAM - cheaper for dev
-kafka_server_type         = "cx32"  # 4 vCPU, 8GB RAM - cheaper for dev
+control_plane_server_type = "cpx21"  # 3 vCPU, 4GB RAM - supported for dev
+kafka_server_type         = "cpx31"  # 4 vCPU, 8GB RAM - supported for dev
 kafka_node_count          = 3       # Still need 3 for KRaft quorum
 
 # K3s version
-k3s_version = "v1.30.5+k3s1"
+k3s_version = "v1.34.1+k3s1"
 
 # Network settings (same as prod)
 network_zone    = "eu-central"
