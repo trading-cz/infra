@@ -1,1 +1,7 @@
 .idea
+.ssh
+doc-dont-read/
+doc/
+*.md
+/terraform/.terraform/
+/terraform/.terraform.lock.hcl

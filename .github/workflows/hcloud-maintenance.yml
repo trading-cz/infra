@@ -114,3 +114,42 @@ jobs:
           else
             echo "No floating IPs found."
           fi
+
+          # ------------------------
+          # 5) Delete SSH keys
+          # ------------------------
+          mapfile -t SSHKEYS < <(
+            hcloud ssh-key list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#SSHKEYS[@]} -gt 0 ]; then
+            echo "Deleting ${#SSHKEYS[@]} SSH keys..."
+            hcloud ssh-key delete "${SSHKEYS[@]}"
+          else
+            echo "No SSH keys found."
+          fi
+
+          # ------------------------
+          # 6) Delete networks
+          # ------------------------
+          mapfile -t NETS < <(
+            hcloud network list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#NETS[@]} -gt 0 ]; then
+            echo "Deleting ${#NETS[@]} networks..."
+            hcloud network delete "${NETS[@]}"
+          else
+            echo "No networks found."
+          fi
+
+          # ------------------------
+          # 7) Delete firewalls
+          # ------------------------
+          mapfile -t FWS < <(
+            hcloud firewall list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#FWS[@]} -gt 0 ]; then
+            echo "Deleting ${#FWS[@]} firewalls..."
+            hcloud firewall delete "${FWS[@]}"
+          else
+            echo "No firewalls found."
+          fi
