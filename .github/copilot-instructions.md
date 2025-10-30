@@ -44,6 +44,7 @@ Configuration in `kubernetes/overlays/{dev|prod}/` overrides base configs in `ku
 
 ## Troubleshooting & Recent Context
 - **Local Terraform Usage**: You can use a local Terraform executable (e.g., `terraform.exe validate`) to check configuration before pushing changes. Example:
-	- `C:\projects\apps\terraform_1.13.4\terraform.exe validate`
+	$env:TF_VAR_ssh_public_key = Get-Content -Raw 'C:\projects\git-public\infra\.ssh\hetzner_k3s_ed25519.pub'; $env:TF_VAR_hcloud_token = Get-Content -Raw 'C:\projects\git-public\infra\.ssh\hcloud_token'; $env:TF_VAR_environment = 'dev'; cd terraform; C:\projects\apps\terraform_1.13.4\terraform.exe init -backend=false; C:\projects\apps\terraform_1.13.4\terraform.exe validate 	
+
 
 - **CI/CD Validation**: All infrastructure changes are validated and deployed via GitHub Actions. Local validation is optional but recommended for troubleshooting.

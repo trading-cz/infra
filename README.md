@@ -2,7 +2,40 @@
 
 Automated K3s + Kafka (KRaft) infrastructure with ArgoCD GitOps for algorithmic trading applications.
 
-## � What You Get
+## 🏗️ Modular Project Structure
+
+This project uses a fully modular Terraform setup for infrastructure. All cloud resources are managed via modules:
+
+```
+terraform/
+├── main.tf, variables.tf, outputs.tf, versions.tf
+├── modules/
+│   ├── network/   # Networking (VPC, subnets, firewall)
+│   ├── compute/   # VMs, SSH keys
+│   ├── k3s/       # K3s cluster resources
+│   └── kafka/     # Kafka cluster (future)
+├── environments/
+│   ├── dev.tfvars
+│   └── prod.tfvars
+└── templates/     # VM initialization scripts
+```
+
+Kubernetes manifests are also organized for GitOps and environment overlays:
+
+```
+kubernetes/
+├── base/           # Base configurations
+│   ├── kafka/      # Kafka cluster
+│   └── apps/       # Trading apps
+├── overlays/       # Environment overrides
+│   ├── dev/
+│   └── prod/
+└── app-of-apps/    # ArgoCD app-of-apps pattern
+```
+
+All changes are validated with CI/CD review gates for Terraform format, lint, and config validity.
+
+## What You Get
 
 - **K3s Cluster**: 1 control + 3 kafka workers on Hetzner Cloud
 - **Kafka**: 3-broker KRaft cluster (Strimzi operator)
