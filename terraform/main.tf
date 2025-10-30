@@ -9,10 +9,9 @@ resource "random_password" "k3s_token" {
 }
 
 locals {
-  # Avoid marking a single branch with `sensitive()` inside a conditional which can
-  # cause Terraform to panic when evaluating the expression. Use the raw result
-  # here and mark outputs or resource attributes as sensitive where appropriate.
-  k3s_token = var.k3s_token != "" ? var.k3s_token : random_password.k3s_token.result
+  # Use nonsensitive() to unwrap the sensitive value for use in conditionals
+  # The output will still be marked as sensitive in outputs.tf
+  k3s_token = var.k3s_token != "" ? var.k3s_token : nonsensitive(random_password.k3s_token.result)
   
   # Common labels
   common_labels = {
