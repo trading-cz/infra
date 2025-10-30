@@ -50,6 +50,17 @@ jobs:
           echo "== Floating IPs =="
           hcloud floating-ip list -l environment="$ENV" -o columns=id,description,ip,labels || true
 
+          echo
+          echo "== SSH Keys =="
+          hcloud ssh-key list -l environment="$ENV" -o columns=id,name,fingerprint,labels || true
+
+          echo
+          echo "== Networks =="
+          hcloud network list -l environment="$ENV" -o columns=id,name,ip_range,labels || true
+
+          echo
+          echo "== Firewalls =="
+          hcloud firewall list -l environment="$ENV" -o columns=id,name,labels || true
       # ---------- DESTROY ----------
       - name: Destroy ALL resources by env
         if: ${{ inputs.action == 'destroy' }}
