@@ -2,16 +2,15 @@ provider "hcloud" {
   token = var.hcloud_token
 }
 
-# Generate random K3s token if not provided
+# Generate random K3s token
 resource "random_password" "k3s_token" {
   length  = 32
   special = false
 }
 
 locals {
-  # Use nonsensitive() to unwrap the sensitive value for use in conditionals
-  # The output will still be marked as sensitive in outputs.tf
-  k3s_token = var.k3s_token != "" ? var.k3s_token : nonsensitive(random_password.k3s_token.result)
+  environment  = var.environment
+  k3s_token    = var.k3s_token != "" ? var.k3s_token : random_password.k3s_token.result
   
   # Common labels
   common_labels = {
