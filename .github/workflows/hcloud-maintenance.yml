@@ -7,6 +7,8 @@ on:
         description: "Environment to target (dev|prod)"
         required: true
         default: "dev"
+        type: choice
+        options: [dev, prod]
       action:
         description: "Action to perform"
         required: true
@@ -113,4 +115,3 @@ jobs:
           else
             echo "No floating IPs found."
           fi
-``
