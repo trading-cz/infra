@@ -12,10 +12,11 @@ module "k3s" {
   control_plane_ip             = "10.0.1.10"
   control_plane_primary_ip_id  = module.network.control_plane_primary_ip_id  # Attach Primary IP #1
   control_plane_user_data      = templatefile("${path.module}/templates/control-plane-init.sh", {
-    k3s_version = var.k3s_version
-    k3s_token   = var.k3s_token
-    node_ip     = "10.0.1.10"
-    environment = var.environment
+    k3s_version     = var.k3s_version
+    k3s_token       = var.k3s_token
+    node_ip         = "10.0.1.10"
+    environment     = var.environment
+    public_ip       = module.network.control_plane_primary_ip_address  # Pass public IP for TLS cert
   })
   worker_user_data            = templatefile("${path.module}/templates/worker-init.sh", {
     k3s_version    = var.k3s_version
