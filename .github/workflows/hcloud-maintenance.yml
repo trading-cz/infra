@@ -14,7 +14,7 @@ on:
         required: true
         default: "list"
         type: choice
-        options: [list, destroy-vms, destroy-all]
+        options: [list, destroy-cluster, destroy-all]
 
 jobs:
   hcloud:
@@ -75,9 +75,9 @@ jobs:
           echo "💡 Tip: Primary IPs persist after VM destruction"
           echo "   Cost: €0.50/month each (€1.00 total)"
           echo "========================================="
-      # ---------- DESTROY VMs ONLY ----------
-      - name: Destroy VMs only (keep Primary IPs)
-        if: ${{ inputs.action == 'destroy-vms' }}
+      # ---------- DESTROY CLUSTER (keep Primary IPs) ----------
+      - name: Destroy cluster (keep Primary IPs for reuse)
+        if: ${{ inputs.action == 'destroy-cluster' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -85,12 +85,21 @@ jobs:
           ENV="${{ inputs.env }}"
 
           echo "========================================="
-          echo "  Destroying VMs (Keeping Primary IPs)"
+          echo "  Destroying Cluster (Keeping Primary IPs)"
           echo "========================================="
           echo
-          echo "⚠️  This will DELETE all VMs but KEEP Primary IPs"
-          echo "   Primary IPs will continue to be billed at €1.00/month"
-          echo "   Use this for daily cluster cleanup"
+          echo "⚠️  This will DELETE:"
+          echo "   - All VMs (servers)"
+          echo "   - Networks & Subnets"
+          echo "   - Firewalls"
+          echo "   - SSH Keys"
+          echo "   - Volumes"
+          echo "   - Load Balancers"
+          echo
+          echo "✅ This will KEEP:"
+          echo "   - Primary IPs (€1.00/month billing continues)"
+          echo
+          echo "Use this for daily cluster cleanup while preserving IPs"
           echo
           
           # Delete servers first
@@ -170,9 +179,10 @@ jobs:
           
           echo
           echo "========================================="
-          echo "✅ VM Cleanup Complete!"
+          echo "✅ Cluster Cleanup Complete!"
           echo "========================================="
-          echo "Primary IPs preserved (still billing €1.00/month)"
+          echo "Destroyed: VMs, Networks, Firewalls, SSH Keys, Volumes, Load Balancers"
+          echo "Preserved: Primary IPs (still billing €1.00/month)"
           echo "Next deployment will reuse the same IPs"
           echo
           
@@ -193,8 +203,16 @@ jobs:
           echo "  ⚠️  DESTROYING ALL RESOURCES  ⚠️"
           echo "========================================="
           echo
-          echo "⚠️  WARNING: This will DELETE EVERYTHING including Primary IPs!"
-          echo "   Primary IPs cannot be recovered once deleted"
+          echo "⚠️  WARNING: This will DELETE EVERYTHING:"
+          echo "   - All VMs (servers)"
+          echo "   - Networks & Subnets"
+          echo "   - Firewalls"
+          echo "   - SSH Keys"
+          echo "   - Volumes"
+          echo "   - Load Balancers"
+          echo "   - Primary IPs (⚠️ CANNOT BE RECOVERED)"
+          echo
+          echo "⚠️  Primary IPs cannot be recovered once deleted!"
           echo "   Next deployment will get NEW random IPs"
           echo "   DNS will need to be updated"
           echo
@@ -316,8 +334,8 @@ jobs:
           
           echo
           echo "========================================="
-          echo "✅ Complete Cleanup Finished!"
+          echo "✅ Complete Destruction Finished!"
           echo "========================================="
-          echo "All resources including Primary IPs deleted"
+          echo "Destroyed: Everything (VMs, Networks, Firewalls, SSH Keys, Volumes, Load Balancers, Primary IPs)"
           echo "Next deployment will create new Primary IPs with random IPs"
           echo "⚠️  Remember to update DNS with new IPs after next deployment"
