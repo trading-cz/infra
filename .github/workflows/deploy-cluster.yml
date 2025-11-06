@@ -100,11 +100,12 @@ jobs:
           curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
           chmod +x hcloud
           
-          # Power off kafka-0
+          # Power off kafka-0 (required for IP assignment)
           echo "Powering off kafka-0..."
           ./hcloud server poweroff ${KAFKA_NODE_0_ID}
           
           # Wait for power off
+          echo "Waiting for shutdown..."
           sleep 10
           
           # Assign Primary IP

@@ -67,9 +67,9 @@ resource "hcloud_server" "kafka_nodes" {
   labels = var.labels
 
   public_net {
-    # Only kafka-0 (count.index == 0) gets IPv4 enabled
-    # Primary IP #2 will be assigned by GitHub Actions post-deployment
-    ipv4_enabled = count.index == 0 ? true : false
+    # IPv4 disabled - Primary IP #2 will be assigned by GitHub Actions
+    # kafka-1 and kafka-2 have no public IPv4 at all
+    ipv4_enabled = false
     ipv6_enabled = false  # IPv6 not needed - using private network for internal comms
   }
 
