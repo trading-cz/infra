@@ -10,20 +10,13 @@ on:
         options:
           - dev
           - prod
-      action:
-        description: 'Action to perform'
-        required: true
-        type: choice
-        options:
-          - create
-          - destroy
 
 env:
   TF_VERSION: '1.13.4'
 
 jobs:
   terraform:
-    name: Terraform ${{ inputs.action }} - ${{ inputs.environment }}
+    name: Deploy Cluster - ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     
@@ -68,13 +61,11 @@ jobs:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
       
       - name: Terraform Apply
-        if: inputs.action == 'create'
         run: terraform apply -auto-approve tfplan
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
       
       - name: Save Terraform outputs
-        if: inputs.action == 'create'
         id: tf_outputs
         run: |
           echo "control_plane_ip=$(terraform output -raw control_plane_ip)" >> $GITHUB_OUTPUT
@@ -84,7 +75,6 @@ jobs:
           terraform output -json > outputs.json
       
       - name: Assign Primary IP to kafka-0
-        if: inputs.action == 'create'
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -124,7 +114,6 @@ jobs:
           echo "   Kafka external IP: ${KAFKA_EXTERNAL_IP}"
             
       - name: Fetch kubeconfig
-        if: inputs.action == 'create'
         run: |
           CONTROL_IP="${{ steps.tf_outputs.outputs.control_plane_ip }}"
           
@@ -150,7 +139,6 @@ jobs:
           chmod 600 kubeconfig.yaml
       
       - name: Upload kubeconfig
-        if: inputs.action == 'create'
         uses: actions/upload-artifact@v4
         with:
           name: kubeconfig-${{ inputs.environment }}
@@ -158,7 +146,6 @@ jobs:
           retention-days: 90
       
       - name: Verify cluster
-        if: inputs.action == 'create'
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
@@ -171,27 +158,15 @@ jobs:
           echo -e "\n=== System Pods ==="
           kubectl get pods -A
       
-      - name: Terraform Destroy
-        if: inputs.action == 'destroy'
-        run: |
-          terraform destroy -auto-approve \
-            -var-file="environments/${{ inputs.environment }}.tfvars" \
-            -var="hcloud_token=${{ secrets.HCLOUD_TOKEN }}" \
-            -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
-            -var="ssh_private_key=${{ secrets.SSH_PRIVATE_KEY }}"
-        env:
-          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-      
       - name: Summary
         if: always()
         run: |
           echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Action**: ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ inputs.action }}" == "create" ] && [ "${{ job.status }}" == "success" ]; then
+          if [ "${{ job.status }}" == "success" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🎉 Cluster Access" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
@@ -199,32 +174,28 @@ jobs:
             echo "kubectl --kubeconfig=kubeconfig.yaml get nodes" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### � Persistent Primary IPs" >> $GITHUB_STEP_SUMMARY
+            echo "### 📍 Persistent Primary IPs" >> $GITHUB_STEP_SUMMARY
             echo "- Control Plane: \`${{ steps.tf_outputs.outputs.control_plane_ip }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- Kafka External: \`${{ steps.tf_outputs.outputs.kafka_external_ip }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- These IPs persist after VM destruction (€1.00/month)" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 💡 To Destroy Cluster" >> $GITHUB_STEP_SUMMARY
-            echo "**Option 1 (Recommended)**: \`hcloud-maintenance → destroy-vms\`" >> $GITHUB_STEP_SUMMARY
+            echo "Use **hcloud-maintenance** workflow:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Option 1 (Daily cleanup)**: \`destroy-vms\`" >> $GITHUB_STEP_SUMMARY
             echo "  - Deletes all VMs (fast!)" >> $GITHUB_STEP_SUMMARY
             echo "  - Keeps Primary IPs for next deployment" >> $GITHUB_STEP_SUMMARY
+            echo "  - Recommended for daily operations" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Option 2**: \`hcloud-maintenance → destroy-all\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Option 2 (Complete shutdown)**: \`destroy-all\`" >> $GITHUB_STEP_SUMMARY
             echo "  - Deletes VMs + Primary IPs" >> $GITHUB_STEP_SUMMARY
-            echo "  - Stops all billing (use only if discontinuing)" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "${{ inputs.action }}" == "destroy" ] && [ "${{ job.status }}" == "success" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🧹 Cleanup Complete" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Infrastructure destroyed via Terraform" >> $GITHUB_STEP_SUMMARY
-            echo "- ⚠️  Note: Primary IPs may still exist (check with hcloud-maintenance)" >> $GITHUB_STEP_SUMMARY
+            echo "  - Stops all billing" >> $GITHUB_STEP_SUMMARY
+            echo "  - Use only when discontinuing environment" >> $GITHUB_STEP_SUMMARY
           fi
 
   post-setup:
     name: Install Strimzi and Configure Cluster
     needs: terraform
-    if: inputs.action == 'create'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     
