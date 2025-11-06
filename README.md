@@ -402,6 +402,27 @@ datacenter = "fsn1-dc14"   # Must match location!
 - Python apps connect via DNS: `trading-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092`
 - No IPv6 needed - private IPv4 network handles all inter-VM traffic
 
+### Firewall Configuration (Testing Phase)
+
+**Current Setup** (for unrestricted testing):
+- ❌ **Control plane**: NO firewall (has public IPv4)
+- ❌ **kafka-0**: NO firewall (has public IPv4)
+- ✅ **kafka-1**: Firewall enabled (no public IPv4 anyway - redundant)
+- ✅ **kafka-2**: Firewall enabled (no public IPv4 anyway - redundant)
+
+**Key Points**:
+- ✅ Hetzner firewall **only affects public interfaces** - private network (10.0.1.0/24) is NEVER blocked
+- ✅ All 4 nodes communicate freely on private network regardless of firewall settings
+- ✅ Kafka cluster (3 brokers) communicates internally without restrictions
+- ✅ Python apps can access all Kafka nodes via internal network
+- ⚠️ Public internet access is unrestricted on control-plane and kafka-0 for testing
+
+**After Testing** - Enable firewall protection:
+1. Edit `terraform/modules/k3s/main.tf`
+2. Uncomment control plane firewall: `firewall_ids = [var.firewall_id]`
+3. Change kafka-0 to use firewall: `firewall_ids = [var.firewall_id]`
+4. Restrict source IPs in `terraform/main.tf` firewall rules (see below)
+
 **Recommendations**:
 1. **Restrict SSH**: Update firewall rules to your IP only
 2. **Enable Kafka TLS**: Configure in Kafka manifests
