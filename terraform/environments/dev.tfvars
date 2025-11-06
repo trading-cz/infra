@@ -2,10 +2,11 @@
 environment   = "dev"
 cluster_name  = "k3s-trading"
 location      = "nbg1"
+datacenter    = "nbg1-dc3"  # Required for Primary IPs
 
 # Development instances
 control_plane_server_type = "cpx21"  # 3 vCPU, 4GB RAM - supported for dev
-kafka_server_type         = "cpx31"  # 4 vCPU, 8GB RAM - supported for dev
+kafka_server_type         = "cpx21"  # 4 vCPU, 8GB RAM - supported for dev
 kafka_node_count          = 3       # Still need 3 for KRaft quorum
 
 # K3s version

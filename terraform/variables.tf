@@ -79,6 +79,12 @@ variable "location" {
   default     = "nbg1" # Nuremberg
 }
 
+variable "datacenter" {
+  description = "Datacenter for Primary IPs (must match server location)"
+  type        = string
+  default     = "nbg1-dc3" # Nuremberg datacenter 3
+}
+
 # K3s configuration
 variable "k3s_version" {
   description = "K3s version to install"

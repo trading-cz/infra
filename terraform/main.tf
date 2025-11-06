@@ -3,14 +3,15 @@ provider "hcloud" {
 }
 
 module "k3s" {
-  source                     = "./modules/k3s"
-  environment                = var.environment
-  cluster_name                = var.cluster_name
-  k3s_token                  = var.k3s_token
-  control_plane_name          = "${var.cluster_name}-${var.environment}-control"
-  control_plane_server_type   = var.control_plane_server_type
-  control_plane_ip            = "10.0.1.10"
-  control_plane_user_data     = templatefile("${path.module}/templates/control-plane-init.sh", {
+  source                       = "./modules/k3s"
+  environment                  = var.environment
+  cluster_name                 = var.cluster_name
+  k3s_token                    = var.k3s_token
+  control_plane_name           = "${var.cluster_name}-${var.environment}-control"
+  control_plane_server_type    = var.control_plane_server_type
+  control_plane_ip             = "10.0.1.10"
+  control_plane_primary_ip_id  = module.network.control_plane_primary_ip_id  # Attach Primary IP #1
+  control_plane_user_data      = templatefile("${path.module}/templates/control-plane-init.sh", {
     k3s_version = var.k3s_version
     k3s_token   = var.k3s_token
     node_ip     = "10.0.1.10"
@@ -45,47 +46,55 @@ module "network" {
   network_zone     = var.network_zone
   subnet_ip_range  = var.subnet_ip_range
   firewall_name    = "${var.cluster_name}-${var.environment}-firewall"
+  datacenter       = var.datacenter  # Required for Primary IPs
   firewall_rules   = [
     {
       direction   = "in"
       protocol    = "tcp"
       port        = "22"
-      source_ips  = ["0.0.0.0/0", "::/0"]
+      source_ips  = ["0.0.0.0/0"]
       description = "Allow SSH"
     },
     {
       direction   = "in"
       protocol    = "tcp"
       port        = "6443"
-      source_ips  = ["0.0.0.0/0", "::/0"]
+      source_ips  = ["0.0.0.0/0"]
       description = "Allow Kubernetes API"
     },
     {
       direction   = "in"
       protocol    = "tcp"
       port        = "80"
-      source_ips  = ["0.0.0.0/0", "::/0"]
+      source_ips  = ["0.0.0.0/0"]
       description = "Allow HTTP"
     },
     {
       direction   = "in"
       protocol    = "tcp"
       port        = "443"
-      source_ips  = ["0.0.0.0/0", "::/0"]
+      source_ips  = ["0.0.0.0/0"]
       description = "Allow HTTPS"
     },
     {
       direction   = "in"
       protocol    = "tcp"
+      port        = "9092-9094"
+      source_ips  = ["0.0.0.0/0"]
+      description = "Allow Kafka"
+    },
+    {
+      direction   = "in"
+      protocol    = "tcp"
       port        = "30000-32767"
-      source_ips  = ["0.0.0.0/0", "::/0"]
+      source_ips  = ["0.0.0.0/0"]
       description = "Allow NodePort range"
     },
     {
       direction   = "in"
       protocol    = "icmp"
       port        = null
-      source_ips  = ["0.0.0.0/0", "::/0"]
+      source_ips  = ["0.0.0.0/0"]
       description = "Allow ICMP"
     }
   ]

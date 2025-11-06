@@ -39,7 +39,8 @@ resource "hcloud_server" "control_plane" {
 
   public_net {
     ipv4_enabled = true
-    ipv6_enabled = true
+    ipv4         = var.control_plane_primary_ip_id  # Attach Primary IP #1
+    ipv6_enabled = false  # IPv6 not needed - using private network for internal comms
   }
 
   network {
@@ -63,8 +64,10 @@ resource "hcloud_server" "kafka_nodes" {
   labels = var.labels
 
   public_net {
-    ipv4_enabled = true
-    ipv6_enabled = true
+    # Only kafka-0 (count.index == 0) gets IPv4 enabled
+    # Primary IP #2 will be assigned by GitHub Actions post-deployment
+    ipv4_enabled = count.index == 0 ? true : false
+    ipv6_enabled = false  # IPv6 not needed - using private network for internal comms
   }
 
   network {

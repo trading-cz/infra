@@ -28,3 +28,33 @@ resource "hcloud_firewall" "k3s" {
     }
   }
 }
+
+# Primary IP for control plane (ArgoCD, K3s API, Python apps)
+resource "hcloud_primary_ip" "control_plane" {
+  name          = "${var.network_name}-control-ip"
+  type          = "ipv4"
+  assignee_type = "server"
+  auto_delete   = false  # Persist after server deletion
+  datacenter    = var.datacenter
+  labels        = merge(var.common_labels, { purpose = "control-plane-argocd" })
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [assignee_id]
+  }
+}
+
+# Primary IP for kafka-0 (external Kafka access)
+resource "hcloud_primary_ip" "kafka_external" {
+  name          = "${var.network_name}-kafka-ip"
+  type          = "ipv4"
+  assignee_type = "server"
+  auto_delete   = false  # Persist after server deletion
+  datacenter    = var.datacenter
+  labels        = merge(var.common_labels, { purpose = "kafka-external" })
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [assignee_id]
+  }
+}

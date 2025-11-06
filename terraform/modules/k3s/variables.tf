@@ -19,6 +19,11 @@ variable "control_plane_ip" {
   type        = string
 }
 
+variable "control_plane_primary_ip_id" {
+  description = "Primary IP ID to attach to control plane"
+  type        = string
+}
+
 variable "control_plane_user_data" {
   description = "User data for control plane initialization"
   type        = string

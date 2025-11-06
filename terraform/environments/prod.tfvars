@@ -2,6 +2,7 @@
 environment   = "prod"
 cluster_name  = "k3s-trading"
 location      = "nbg1"
+datacenter    = "nbg1-dc3"  # Required for Primary IPs
 
 # Production-grade instances
 control_plane_server_type = "cpx21"  # 3 vCPU, 4GB RAM
