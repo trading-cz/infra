@@ -33,7 +33,8 @@ resource "hcloud_server" "control_plane" {
   image       = "ubuntu-24.04"
   location    = var.location
   ssh_keys    = [var.ssh_key_id]
-  firewall_ids = [var.firewall_id]
+  # No firewall - has public IPv4 for testing
+  # firewall_ids = [var.firewall_id]
 
   labels = var.labels
 
@@ -59,7 +60,9 @@ resource "hcloud_server" "kafka_nodes" {
   image       = "ubuntu-24.04"
   location    = var.location
   ssh_keys    = [var.ssh_key_id]
-  firewall_ids = [var.firewall_id]
+  # Firewall only for nodes WITHOUT public IPv4 (kafka-1, kafka-2)
+  # kafka-0 has public IPv4, so no firewall for testing
+  firewall_ids = count.index == 0 ? [] : [var.firewall_id]
 
   labels = var.labels
 
