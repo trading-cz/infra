@@ -78,7 +78,6 @@ jobs:
         id: tf_outputs
         run: |
           echo "control_plane_ip=$(terraform output -raw control_plane_ip)" >> $GITHUB_OUTPUT
-          echo "cluster_endpoint=$(terraform output -raw cluster_endpoint)" >> $GITHUB_OUTPUT
           terraform output -json > outputs.json
             
       - name: Fetch kubeconfig
