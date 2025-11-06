@@ -109,7 +109,7 @@ jobs:
           
           # Assign Primary IP
           echo "Assigning Primary IP..."
-          ./hcloud primary-ip assign ${PRIMARY_IP_ID} ${KAFKA_NODE_0_ID}
+          ./hcloud primary-ip assign --server ${KAFKA_NODE_0_ID} ${PRIMARY_IP_ID}
           
           # Power on kafka-0
           echo "Powering on kafka-0..."
