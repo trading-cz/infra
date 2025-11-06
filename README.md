@@ -6,11 +6,20 @@ Ephemeral K3s clusters on Hetzner Cloud for algorithmic trading with **persisten
 ## 🎯 Key Features
 
 ✅ **Persistent Primary IPs**: Same IPs across all deployments (€1.00/month)  
-✅ **Ephemeral VMs**: Deploy for ~10h/day, destroy rest (59% cost savings!)  
+✅ **Ephemeral VMs**: Deploy for ~10h/day, destroy rest (58% cost savings!)  
 ✅ **Stable DNS**: Configure once, works forever  
 ✅ **ArgoCD GitOps**: Auto-deploy from `main` (dev) or `production` (prod)  
-✅ **Kafka KRaft**: 3-broker cluster with external access  
+✅ **Kafka KRaft**: 3-broker cluster (v4.0.0) with external access  
 ✅ **Automated Workflows**: One-click deploy and destroy via GitHub Actions
+
+## 📦 Technology Stack
+
+- **Kubernetes**: K3s v1.34.1+k3s1 (lightweight, production-ready)
+- **Message Broker**: Apache Kafka 4.0.0 via Strimzi Operator (KRaft mode, no ZooKeeper)
+- **GitOps**: ArgoCD with App-of-Apps pattern
+- **Infrastructure as Code**: Terraform v1.13.4 (modular design)
+- **Configuration Management**: Kustomize overlays (base + dev/prod patches)
+- **Cloud Provider**: Hetzner Cloud (Nuremberg, Germany)
 
 ## 🏗️ Architecture Overview
 
@@ -51,17 +60,23 @@ Internal Communication:
 
 ### Cost Optimization Strategy
 
-**Traditional 24/7 cluster**: €152/month  
-**Our ephemeral approach**: €63/month (58% savings!)
+**Traditional 24/7 cluster**: ~€106/month  
+**Our ephemeral approach**: ~€44/month (58% savings!)
 
 | Resource | Cost | Strategy |
 |----------|------|----------|
 | Primary IPs (2×) | €1.00/month | Persistent, always billed |
-| Control Plane VM | ~€21/month | Destroyed daily (~10h/day uptime) |
-| Kafka VMs (3×) | ~€42/month | Destroyed daily (~10h/day uptime) |
-| **Total** | **~€63/month** | **59% cheaper than 24/7!** |
+| Control Plane VM (CPX21) | ~€6.38/month | Destroyed daily (~10h/day, 22 days) |
+| Kafka VMs (3× CPX31) | ~€37.62/month | Destroyed daily (~10h/day, 22 days) |
+| **Total** | **~€45/month** | **58% cheaper than 24/7!** |
 
 💡 **The Magic**: Primary IPs cost €1/month continuously, but VMs only cost when running. Deploy for 10h/day, destroy rest → massive savings!
+
+**Detailed Breakdown** (Production Configuration):
+- CPX21 (Control Plane): €8.21/month × 30% uptime = €2.46/month
+- CPX31 (Kafka × 3): €16.32/month × 3 × 30% uptime = €14.69/month
+- Dev environment: ~€2/month (2h/day, 6% uptime)
+- **Combined Total**: ~€20/month (prod + dev + Primary IPs)
 
 ## 🚀 Quick Start
 
@@ -241,7 +256,7 @@ EOF
 ### Deploy Your Trading App
 
 1. Add deployment to `kubernetes/base/apps/your-app.yaml`
-2. Update `kubernetes/base/apps/kustomization.yaml`
+2. Update `kubernetes/base/apps/kustomization.yaml` to include your app
 3. Commit and push to `main` (dev) or `production` (prod)
 4. ArgoCD deploys automatically (~30 seconds)
 
@@ -279,19 +294,30 @@ kubectl get app -n argocd -o jsonpath='{.items[*].status.sync.status}'
 
 ## 💰 Detailed Cost Breakdown
 
-### Monthly Costs (Dev Environment, 10h/day uptime)
+### Monthly Costs (Production Environment, 10h/day uptime, 22 days/month)
 
-| Resource | Hourly | Daily (10h) | Monthly (22 days) | Notes |
-|----------|--------|-------------|-------------------|-------|
-| Control Plane (CPX21) | €0.029 | €0.29 | ~€6.38 | 3 vCPU, 4GB RAM |
-| kafka-0 (CPX31) | €0.057 | €0.57 | ~€12.54 | 4 vCPU, 8GB RAM |
-| kafka-1 (CPX31) | €0.057 | €0.57 | ~€12.54 | 4 vCPU, 8GB RAM |
-| kafka-2 (CPX31) | €0.057 | €0.57 | ~€12.54 | 4 vCPU, 8GB RAM |
+| Resource | Hourly Rate | Daily (10h) | Monthly (22 days) | Notes |
+|----------|-------------|-------------|-------------------|-------|
+| Control Plane (CPX21) | €0.0114 | €0.114 | ~€2.51 | 3 vCPU, 4GB RAM |
+| kafka-0 (CPX31) | €0.0228 | €0.228 | ~€5.02 | 4 vCPU, 8GB RAM |
+| kafka-1 (CPX31) | €0.0228 | €0.228 | ~€5.02 | 4 vCPU, 8GB RAM |
+| kafka-2 (CPX31) | €0.0228 | €0.228 | ~€5.02 | 4 vCPU, 8GB RAM |
 | Primary IP #1 | - | - | €0.50 | Persistent (24/7) |
 | Primary IP #2 | - | - | €0.50 | Persistent (24/7) |
-| **Total** | - | **~€2.00** | **~€44.50** | **58% cheaper than 24/7!** |
+| **Production Total** | - | **~€0.798** | **~€17.57** | **58% cheaper than 24/7!** |
 
-**vs 24/7 operation**: €106/month → Save €61.50/month!
+**Development Environment** (2h/day, 22 days/month = 44 hours/month):
+- Control Plane (CPX21): €8.21/month × 6% = €0.49/month
+- Kafka (3× CPX21): €8.21/month × 3 × 6% = €1.48/month
+- **Dev Total**: ~€1.97/month
+
+**Combined Total**: €17.57 (prod) + €1.97 (dev) + €1.00 (Primary IPs) = **~€20.54/month**
+
+**vs 24/7 operation**: 
+- Prod 24/7: €8.21 + (€16.32 × 3) = €57.17/month
+- Dev 24/7: €8.21 + (€8.21 × 3) = €32.84/month
+- Total 24/7: €90.01/month
+- **Savings: €69.47/month (77% reduction!)**
 
 ### Cost Optimization Tips
 
@@ -461,6 +487,12 @@ ID       NAME                         IP           ASSIGNEE
 
 ### ✨ Persistent Primary IPv4 Implementation
 
+**Version Information**:
+- Terraform: v1.13.4
+- K3s: v1.34.1+k3s1
+- Kafka (Strimzi): 4.0.0
+- Hetzner Cloud Provider
+
 **Key Changes (Nov 2025)**:
 - ✅ Added 2 persistent Primary IPs (€1.00/month total)
 - ✅ Primary IP #1 auto-attached to control plane (Terraform)
@@ -468,7 +500,7 @@ ID       NAME                         IP           ASSIGNEE
 - ✅ kafka-1, kafka-2 use private network only (save €1.00/month)
 - ✅ Disabled IPv6 completely (not needed for this architecture)
 - ✅ Fixed SSH timeout issue (Terraform outputs public IPs)
-- ✅ Updated `hcloud-maintenance` with `destroy-vms` and `destroy-all` options
+- ✅ Updated `hcloud-maintenance` with `destroy-cluster` and `destroy-all` options
 - ✅ Added Kafka ports (9092-9094) to firewall
 - ✅ Kafka listeners: internal (9092) + external (9094 via NodePort 32100)
 
