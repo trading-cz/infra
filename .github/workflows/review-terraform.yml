@@ -1,11 +1,15 @@
-name: Terraform Review Quality Gates
+name: Terraform Validation
 
 on:
   pull_request:
     paths:
-      - 'terraform/**'
+      - '*.tf'
+      - 'modules/**'
+      - 'environments/**'
+      - 'templates/**'
+      - 'argocd/**'
       - '.github/workflows/deploy-cluster.yml'
-      - 'kubernetes/**'
+      - '.github/workflows/review-terraform.yml'
 
 jobs:
   lint:
@@ -22,26 +26,24 @@ jobs:
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
-        working-directory: ./terraform
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+        env:
+          TF_VAR_hcloud_token: "dummy-token-for-validation"
+          TF_VAR_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDummyKeyForValidation dummy@example.com"
 
       - name: Terraform Validate
         run: terraform validate
-        working-directory: ./terraform
-
-      - name: Terraform Validate (dev)
-        run: terraform validate -var="environment=dev"
-        working-directory: ./terraform
-
-      - name: Terraform Validate (prod)
-        run: terraform validate -var="environment=prod"
-        working-directory: ./terraform
+        env:
+          TF_VAR_hcloud_token: "dummy-token-for-validation"
+          TF_VAR_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDummyKeyForValidation dummy@example.com"
+          TF_VAR_environment: "dev"
 
       - name: Install tflint
         run: |
           curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
           tflint --init
-        working-directory: ./terraform
 
       - name: Run tflint
         run: tflint --recursive
-        working-directory: ./terraform
