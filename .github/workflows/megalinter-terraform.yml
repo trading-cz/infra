@@ -36,11 +36,16 @@ jobs:
         with:
           fetch-depth: 0  # Full history for better analysis
 
+      # Cache Docker images (helps with rapid commits)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       # MegaLinter
       - name: MegaLinter
         # Using terraform flavor for optimized Terraform linting
         # More info at https://megalinter.io/latest/flavors/
-        uses: oxsecurity/megalinter/flavors/terraform@v8
+        # v9 includes improved stability & terraform-fmt v1.13.3+
+        uses: oxsecurity/megalinter/flavors/terraform@v9
         id: ml
         # All available variables are described in documentation
         # https://megalinter.io/latest/config-file/
