@@ -30,12 +30,21 @@ module "k3s" {
     node_ip     = "10.0.1.20"
     node_label  = "node-role.kubernetes.io/kafka=true"
   })
+  app_user_data = templatefile("${path.module}/templates/worker-init.sh", {
+    k3s_version = var.k3s_version
+    k3s_token   = var.k3s_token
+    k3s_url     = "https://10.0.1.10:6443"
+    node_ip     = "10.0.1.30"
+    node_label  = "node-role.kubernetes.io/app=true"
+  })
   network_id        = module.network.network_id
   firewall_id       = module.network.firewall_id
   ssh_key_id        = module.compute.ssh_key_id
   location          = var.location
   kafka_node_count  = var.kafka_node_count
   kafka_server_type = var.kafka_server_type
+  app_node_count    = var.app_node_count
+  app_server_type   = var.app_server_type
   labels = {
     environment = var.environment
     managed_by  = "terraform"
@@ -46,7 +55,6 @@ module "k3s" {
 
 module "network" {
   source           = "./modules/network"
-  hcloud_token     = var.hcloud_token
   network_name     = "${var.cluster_name}-${var.environment}-network"
   network_ip_range = var.network_ip_range
   network_zone     = var.network_zone
@@ -114,7 +122,6 @@ module "network" {
 
 module "compute" {
   source         = "./modules/compute"
-  hcloud_token   = var.hcloud_token
   ssh_key_name   = "${var.cluster_name}-${var.environment}"
   ssh_public_key = var.ssh_public_key
   common_labels = {
@@ -122,11 +129,5 @@ module "compute" {
     managed_by  = "terraform"
     cluster     = var.cluster_name
   }
-  network_id  = module.network.network_id
-  firewall_id = module.network.firewall_id
-}
-
-module "kafka" {
-  source = "./modules/kafka"
 }
 

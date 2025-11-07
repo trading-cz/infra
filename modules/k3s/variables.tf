@@ -1,9 +1,3 @@
-variable "k3s_token" {
-  description = "K3s cluster token"
-  type        = string
-  default     = ""
-}
-
 variable "control_plane_name" {
   description = "Name of the control plane server"
   type        = string
@@ -77,4 +71,22 @@ variable "kafka_node_count" {
 variable "kafka_server_type" {
   description = "Type of Kafka worker server"
   type        = string
+}
+
+variable "app_node_count" {
+  description = "Number of application worker nodes (for Python apps)"
+  type        = number
+  default     = 0
+}
+
+variable "app_server_type" {
+  description = "Type of application worker server"
+  type        = string
+  default     = "cx22" # Budget: 2 vCPU, 4GB RAM, x86_64
+}
+
+variable "app_user_data" {
+  description = "User data for app worker initialization"
+  type        = string
+  default     = ""
 }

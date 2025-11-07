@@ -32,3 +32,13 @@ output "kafka_node_0_private_ip" {
   description = "Private IP of kafka-0 (for verification)"
   value       = [for n in hcloud_server.kafka_nodes[0].network : n.ip][0]
 }
+
+output "app_node_ids" {
+  description = "IDs of the application worker nodes"
+  value       = [for n in hcloud_server.app_nodes : n.id]
+}
+
+output "app_node_ips" {
+  description = "Private IPs of the application worker nodes"
+  value       = [for s in hcloud_server.app_nodes : [for n in s.network : n.ip][0]]
+}

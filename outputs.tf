@@ -29,6 +29,11 @@ output "kafka_nodes_private_ips" {
   value       = module.k3s.kafka_node_ips
 }
 
+output "app_nodes_private_ips" {
+  description = "Private IPs of application worker nodes"
+  value       = module.k3s.app_node_ips
+}
+
 output "network_id" {
   description = "ID of the private network"
   value       = module.network.network_id
