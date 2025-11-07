@@ -1,0 +1,40 @@
+# MegaLinter Configuration File
+# Documentation: https://megalinter.io/latest/configuration/
+
+# Apply linters only on specific file types
+APPLY_FIXES: none  # Don't auto-fix in CI (use 'all' for local development)
+
+# Enable only Terraform-related linters
+ENABLE:
+  - TERRAFORM
+
+# Terraform linters configuration
+TERRAFORM_TERRAFORM_FMT_ARGUMENTS:
+  - -check
+  - -recursive
+
+TERRAFORM_TFLINT_ARGUMENTS:
+  - --recursive
+  - --minimum-failure-severity=error
+
+# Filter files to analyze
+FILTER_REGEX_EXCLUDE: |
+  (\.terraform/|\.terraform\.lock\.hcl|terraform\.tfstate|terraform\.tfstate\.backup)
+
+# File extensions to process
+TERRAFORM_FILE_EXTENSIONS:
+  - .tf
+  - .tfvars
+
+# Disable specific linters if needed (uncomment to disable)
+# DISABLE_LINTERS:
+#   - TERRAFORM_CHECKOV  # Disable Checkov if too strict
+#   - TERRAFORM_TERRASCAN  # Disable Terrascan if not needed
+
+# Report configuration
+SHOW_ELAPSED_TIME: true
+FILEIO_REPORTER: false  # Disable file.io upload for security
+
+# GitHub integration
+GITHUB_COMMENT_REPORTER: true  # Post results as PR comments
+UPDATED_SOURCES_REPORTER: false  # Don't create fix PRs automatically
