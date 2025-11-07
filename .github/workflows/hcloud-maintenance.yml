@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Hetzner CLI
-        uses: hetznercloud/setup-hcloud@v1
-        with:
-          hcloud-version: latest
-        env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+          hcloud version
 
       # ---------- LIST ----------
       - name: List all resources by env
