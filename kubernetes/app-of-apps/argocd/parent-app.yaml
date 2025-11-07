@@ -1,23 +1,23 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: trading-system
+  name: trading-system-dev
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   
-  # Source: This repository
+  # Source: Config repository (trading-cz/config)
   source:
-    repoURL: 'https://github.com/trading-cz/infra.git'
+    repoURL: 'https://github.com/trading-cz/config.git'
     targetRevision: main
-    path: kubernetes/app-of-apps/overlays/dev  # Change to 'prod' for production
+    path: overlays/dev/app-of-apps
   
   # Destination: Current cluster
   destination:
     server: 'https://kubernetes.default.svc'
-    namespace: default
+    namespace: argocd
   
   # Sync policy: Automatic with self-healing
   syncPolicy:
@@ -43,7 +43,49 @@ spec:
         - /spec/replicas  # Ignore replica count changes (HPA may modify)
 
 ---
-# Optional: ArgoCD AppProject for better organization
+# Production Parent App
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: trading-system-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  # Source: Config repository (trading-cz/config), production branch
+  source:
+    repoURL: 'https://github.com/trading-cz/config.git'
+    targetRevision: production
+    path: overlays/prod/app-of-apps
+  
+  # Destination: Current cluster
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: argocd
+  
+  # Sync policy: Manual approval for production
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore differences that don't matter
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+---
+# ArgoCD AppProject for better organization
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:

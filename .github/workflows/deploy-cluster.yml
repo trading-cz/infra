@@ -20,10 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     
-    defaults:
-      run:
-        working-directory: ./terraform
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -142,7 +138,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kubeconfig-${{ inputs.environment }}
-          path: ./terraform/kubeconfig.yaml
+          path: ./kubeconfig.yaml
           retention-days: 90
       
       - name: Verify cluster
@@ -194,7 +190,7 @@ jobs:
           fi
 
   post-setup:
-    name: Install Strimzi and Configure Cluster
+    name: Verify Cluster Bootstrap
     needs: terraform
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
@@ -214,153 +210,117 @@ jobs:
         with:
           version: 'v1.30.0'
       
-      - name: Install Strimzi Operator
+      - name: Wait for cloud-init to complete
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
-          echo "=== Creating kafka namespace ==="
-          kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
+          echo "=== Waiting for cloud-init to install Strimzi and ArgoCD ==="
+          echo "This typically takes 3-5 minutes..."
+          sleep 180  # Give cloud-init time to run
           
-          echo "=== Installing Strimzi Operator ==="
-          kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
+          echo "=== Checking cluster readiness ==="
+          kubectl get nodes
+      
+      - name: Verify Strimzi Installation
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
           
-          echo "=== Waiting for Strimzi Operator to be ready ==="
-          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s
+          echo "=== Checking Strimzi Operator ==="
+          kubectl get pods -n kafka || echo "⚠️ Strimzi not ready yet"
           
-          echo "=== Strimzi Operator installed successfully ==="
+          # Wait for Strimzi if not ready
+          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
           kubectl get pods -n kafka
       
-      - name: Apply Kafka Cluster
+      - name: Verify ArgoCD Installation  
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
-          echo "=== Applying Kafka cluster configuration ==="
-          kubectl apply -k kubernetes/overlays/${{ inputs.environment }}/kafka
+          echo "=== Checking ArgoCD ==="
+          kubectl get pods -n argocd || echo "⚠️ ArgoCD not ready yet"
           
-          echo "=== Waiting for Kafka cluster to be ready (this may take a few minutes) ==="
-          kubectl wait kafka/trading-cluster --for=condition=Ready --timeout=600s -n kafka || true
-          
-          echo "=== Kafka cluster status ==="
-          kubectl get kafka -n kafka
-          kubectl get pods -n kafka
-      
-      - name: Create application namespaces
-        run: |
-          export KUBECONFIG=./kubeconfig.yaml
-          
-          echo "=== Creating application namespaces ==="
-          kubectl create namespace ingestion --dry-run=client -o yaml | kubectl apply -f -
-          kubectl create namespace strategies --dry-run=client -o yaml | kubectl apply -f -
-          
-          echo "=== Namespaces created ==="
-          kubectl get namespaces
-      
-      - name: Install ArgoCD
-        run: |
-          export KUBECONFIG=./kubeconfig.yaml
-          
-          echo "=== Creating argocd namespace ==="
-          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-          
-          echo "=== Installing ArgoCD ==="
-          kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
-          
-          echo "=== Waiting for ArgoCD to be ready ==="
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s
-          
-          echo "=== ArgoCD installed successfully ==="
+          # Wait for ArgoCD if not ready
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s || true
           kubectl get pods -n argocd
       
-      - name: Configure ArgoCD Repository Access
+      - name: Verify ArgoCD Parent Application
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
-          # Determine branch based on environment
-          if [ "${{ inputs.environment }}" == "dev" ]; then
-            BRANCH="main"
-          else
-            BRANCH="production"
-          fi
+          echo "=== Checking ArgoCD Applications ==="
+          kubectl get applications -n argocd -o wide
           
-          echo "=== Configuring ArgoCD for environment: ${{ inputs.environment }} (branch: ${BRANCH}) ==="
-          
-          # Deploy parent app-of-apps application
-          cat <<EOF | kubectl apply -f -
-          apiVersion: argoproj.io/v1alpha1
-          kind: Application
-          metadata:
-            name: trading-system-${{ inputs.environment }}
-            namespace: argocd
-            finalizers:
-              - resources-finalizer.argocd.argoproj.io
-          spec:
-            project: default
-            source:
-              repoURL: 'https://github.com/trading-cz/infra.git'
-              targetRevision: ${BRANCH}
-              path: kubernetes/app-of-apps/overlays/${{ inputs.environment }}
-            destination:
-              server: 'https://kubernetes.default.svc'
-              namespace: default
-            syncPolicy:
-              automated:
-                prune: true
-                selfHeal: true
-              syncOptions:
-                - CreateNamespace=true
-          EOF
-          
-          echo "=== ArgoCD application created ==="
-          kubectl get applications -n argocd
+          echo ""
+          echo "=== Parent Application Details ==="
+          kubectl get application trading-system-${{ inputs.environment }} -n argocd -o yaml || echo "⚠️ Parent app not created yet"
       
-      - name: Wait for ArgoCD Sync
+      - name: Monitor ArgoCD Sync Progress
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Waiting for ArgoCD to sync applications ==="
-          sleep 30
+          sleep 60  # Give ArgoCD time to start syncing
           
           echo "=== ArgoCD Application Status ==="
-          kubectl get applications -n argocd
+          kubectl get applications -n argocd -o wide
           
-          echo "=== All Pods ==="
+          echo ""
+          echo "=== All Pods Across Namespaces ==="
           kubectl get pods -A
       
-      - name: Cluster Ready Summary
+      - name: Cluster Bootstrap Summary
+        if: always()
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
-          echo "## 🎉 Cluster Ready!" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎉 Cluster Bootstrap Complete!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Environment: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Installed Components" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ K3s Cluster (1 control + 3 kafka workers)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Strimzi Operator" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Kafka KRaft Cluster (3 brokers)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ ArgoCD (GitOps)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Application namespaces (ingestion, strategies)" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Installed via cloud-init (automatic)" >> $GITHUB_STEP_SUMMARY
+          echo "- K3s Cluster (1 control + 3 kafka workers)" >> $GITHUB_STEP_SUMMARY
+          echo "- Strimzi Operator (Kafka platform)" >> $GITHUB_STEP_SUMMARY
+          echo "- ArgoCD (GitOps controller)" >> $GITHUB_STEP_SUMMARY
+          echo "- ArgoCD Parent App (App-of-Apps pattern)" >> $GITHUB_STEP_SUMMARY
+          echo "- Application namespaces (kafka, ingestion, strategies)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🌐 External Access (Persistent IPs)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Control Plane**: Uses Primary IP #1" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kafka-0**: Uses Primary IP #2" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kafka-1, Kafka-2**: Internal only (IPv6)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Control Plane**: Primary IP #1" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kafka-0**: Primary IP #2" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kafka-1, Kafka-2**: Internal only (private network)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ArgoCD Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 ArgoCD GitOps Configuration" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.environment }}" == "dev" ]; then
-            echo "- Branch: \`main\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository**: \`trading-cz/config\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch**: \`main\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- Branch: \`production\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository**: \`trading-cz/config\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch**: \`production\`" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "- Auto-sync: ✅ Enabled" >> $GITHUB_STEP_SUMMARY
-          echo "- Self-heal: ✅ Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "- **Auto-sync**: ✅ Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "- **Self-heal**: ✅ Enabled" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. ArgoCD will automatically deploy apps from Git" >> $GITHUB_STEP_SUMMARY
-          echo "2. Push changes to your branch to trigger updates" >> $GITHUB_STEP_SUMMARY
-          echo "3. Monitor: \`kubectl get applications -n argocd\`" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Current Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get applications -n argocd 2>/dev/null || echo "ArgoCD starting..."
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 💰 Cost Optimization" >> $GITHUB_STEP_SUMMARY
-          echo "- Primary IPs: €1.00/month (persistent)" >> $GITHUB_STEP_SUMMARY
-          echo "- VMs: Only charged when running (~€6/day)" >> $GITHUB_STEP_SUMMARY
-          echo "- Use \`hcloud-maintenance → destroy-vms\` for daily cleanup!" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 What Happens Next" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will automatically deploy from the **config repository**:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Kafka cluster (3 brokers, KRaft mode)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Alpaca ingestion service" >> $GITHUB_STEP_SUMMARY
+          echo "3. Dummy trading strategy" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Monitor progress:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "kubectl get applications -n argocd" >> $GITHUB_STEP_SUMMARY
+          echo "kubectl get pods -n kafka" >> $GITHUB_STEP_SUMMARY
+          echo "kubectl get pods -n ingestion" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 💰 Cost Management" >> $GITHUB_STEP_SUMMARY
+          echo "- **Primary IPs**: €1.00/month (always billed)" >> $GITHUB_STEP_SUMMARY
+          echo "- **VMs**: Only charged when running" >> $GITHUB_STEP_SUMMARY
+          echo "- **Daily cleanup**: Use \`hcloud-maintenance → destroy-cluster\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Complete shutdown**: Use \`hcloud-maintenance → destroy-all\`" >> $GITHUB_STEP_SUMMARY

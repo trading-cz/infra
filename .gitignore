@@ -2,3 +2,7 @@
 .ssh
 /terraform/.terraform/
 /terraform/.terraform.lock.hcl
+*.md
+.ssh
+/terraform/.terraform/
+/terraform/.terraform.lock.hcl

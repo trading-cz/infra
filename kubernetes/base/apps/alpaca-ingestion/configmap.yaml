@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alpaca-ingestion-config
+  namespace: trading-apps
+data:
+  # Application settings
+  LOG_LEVEL: "INFO"
+  APP_NAME: "alpaca-ingestion"
+  
+  # Kafka settings (defaults)
+  KAFKA_BOOTSTRAP_SERVERS: "trading-cluster-kafka-bootstrap.kafka:9092"
+  KAFKA_TOPIC: "stock-ticks"
+  
+  # FastAPI settings
+  UVICORN_HOST: "0.0.0.0"
+  UVICORN_PORT: "8000"

@@ -5,6 +5,8 @@ namespace: kafka
 
 resources:
   - ../../../base/kafka
+  - topics/stock-ticks.yaml
+  - topics/trade-signals.yaml
 
 commonLabels:
   environment: dev

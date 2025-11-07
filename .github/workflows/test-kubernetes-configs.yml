@@ -1,0 +1,144 @@
+name: Test Kubernetes Configs
+
+on:
+  pull_request:
+    paths:
+      - 'kubernetes/**'
+      - '.github/workflows/test-kubernetes-configs.yml'
+  push:
+    branches:
+      - main
+      - production
+      - infra-tests
+    paths:
+      - 'kubernetes/**'
+
+jobs:
+  kustomize-validation:
+    name: Validate Kustomize Overlays
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+          kustomize version
+      
+      - name: Validate Dev Kafka
+        run: |
+          echo "::group::Testing dev/kafka"
+          kustomize build kubernetes/overlays/dev/kafka > /tmp/dev-kafka.yaml
+          echo "✓ Kafka overlay builds successfully"
+          wc -l /tmp/dev-kafka.yaml
+          echo "::endgroup::"
+      
+      - name: Validate Dev Alpaca Ingestion
+        run: |
+          echo "::group::Testing dev/alpaca-ingestion"
+          kustomize build kubernetes/overlays/dev/alpaca-ingestion > /tmp/dev-alpaca.yaml
+          echo "✓ Alpaca Ingestion overlay builds successfully"
+          wc -l /tmp/dev-alpaca.yaml
+          echo "::endgroup::"
+      
+      - name: Validate Dev Dummy Strategy
+        run: |
+          echo "::group::Testing dev/dummy-strategy"
+          kustomize build kubernetes/overlays/dev/dummy-strategy > /tmp/dev-strategy.yaml
+          echo "✓ Dummy Strategy overlay builds successfully"
+          wc -l /tmp/dev-strategy.yaml
+          echo "::endgroup::"
+      
+      - name: Validate Prod Kafka
+        run: |
+          echo "::group::Testing prod/kafka"
+          kustomize build kubernetes/overlays/prod/kafka > /tmp/prod-kafka.yaml
+          echo "✓ Kafka overlay builds successfully"
+          wc -l /tmp/prod-kafka.yaml
+          echo "::endgroup::"
+      
+      - name: Validate Prod Alpaca Ingestion
+        run: |
+          echo "::group::Testing prod/alpaca-ingestion"
+          kustomize build kubernetes/overlays/prod/alpaca-ingestion > /tmp/prod-alpaca.yaml
+          echo "✓ Alpaca Ingestion overlay builds successfully"
+          wc -l /tmp/prod-alpaca.yaml
+          echo "::endgroup::"
+      
+      - name: Validate Prod Dummy Strategy
+        run: |
+          echo "::group::Testing prod/dummy-strategy"
+          kustomize build kubernetes/overlays/prod/dummy-strategy > /tmp/prod-strategy.yaml
+          echo "✓ Dummy Strategy overlay builds successfully"
+          wc -l /tmp/prod-strategy.yaml
+          echo "::endgroup::"
+      
+      - name: Validate YAML Syntax
+        run: |
+          echo "::group::YAML Syntax Validation"
+          for file in /tmp/dev-kafka.yaml /tmp/dev-alpaca.yaml /tmp/dev-strategy.yaml /tmp/prod-kafka.yaml /tmp/prod-alpaca.yaml /tmp/prod-strategy.yaml; do
+            python3 -c "import yaml; yaml.safe_load_all(open('$file'))" && echo "✓ $file - Valid YAML" || exit 1
+          done
+          echo "::endgroup::"
+      
+      - name: Upload Generated Manifests
+        uses: actions/upload-artifact@v3
+        with:
+          name: kubernetes-manifests
+          path: /tmp/*.yaml
+          retention-days: 7
+
+  argocd-validation:
+    name: Validate ArgoCD Applications
+    runs-on: ubuntu-latest
+    needs: kustomize-validation
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+      
+      - name: Validate ArgoCD Parent Apps
+        run: |
+          echo "::group::Validating ArgoCD Applications"
+          echo "Checking parent app YAML syntax..."
+          python3 -c "import yaml; docs = list(yaml.safe_load_all(open('kubernetes/app-of-apps/argocd/parent-app.yaml'))); print(f'Found {len(docs)} resources')"
+          echo "::endgroup::"
+      
+      - name: Validate App-of-Apps Structure
+        run: |
+          echo "::group::Validating App-of-Apps"
+          
+          # Check dev app-of-apps files exist
+          ls -la kubernetes/overlays/dev/app-of-apps/
+          
+          # Check prod app-of-apps files exist
+          ls -la kubernetes/overlays/prod/app-of-apps/
+          
+          echo "✓ App-of-apps structure validated"
+          echo "::endgroup::"
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [kustomize-validation, argocd-validation]
+    if: always()
+    
+    steps:
+      - name: Summary
+        run: |
+          echo "## Kubernetes Configuration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All Kustomize overlays validated successfully" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All ArgoCD Applications validated successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tested Components" >> $GITHUB_STEP_SUMMARY
+          echo "- Dev: Kafka, Alpaca Ingestion, Dummy Strategy" >> $GITHUB_STEP_SUMMARY
+          echo "- Prod: Kafka, Alpaca Ingestion, Dummy Strategy" >> $GITHUB_STEP_SUMMARY

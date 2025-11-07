@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kafka-cluster
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/trading-cz/config.git'
+    targetRevision: production
+    path: overlays/prod/kafka
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: kafka
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

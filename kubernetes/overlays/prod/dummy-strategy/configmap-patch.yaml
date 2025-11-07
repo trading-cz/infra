@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dummy-strategy-config
+  namespace: trading-apps
+data:
+  # Override for production
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "production"
+  
+  # Production Kafka topics (no "dev-" prefix)
+  KAFKA_INPUT_TOPIC: "stock-ticks"
+  KAFKA_OUTPUT_TOPIC: "trade-signals"
+  
+  # Production settings
+  DEBUG: "false"

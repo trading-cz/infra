@@ -1,0 +1,29 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: trading-app
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: trading-cluster
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # Allow read/write to all topics
+      - resource:
+          type: topic
+          name: '*'
+          patternType: literal
+        operations: [Read, Write, Describe, Create]
+      # Allow consumer groups
+      - resource:
+          type: group
+          name: '*'
+          patternType: literal
+        operations: [Read, Describe]
+      # Allow cluster operations
+      - resource:
+          type: cluster
+        operations: [Describe, DescribeConfigs]
