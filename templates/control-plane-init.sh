@@ -36,13 +36,13 @@ kubectl get nodes
 echo ""
 echo "=== Waiting for worker nodes to join cluster ==="
 echo "Expected: 3 kafka workers + 1 control plane = 4 nodes total"
-TIMEOUT=300
+TIMEOUT=120  # 2 minutes should be enough - workers boot in parallel
 ELAPSED=0
 until [ $(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $ELAPSED -ge $${TIMEOUT} ]; do
   CURRENT=$(kubectl get nodes --no-headers | wc -l)
   echo "[$ELAPSED/$${TIMEOUT} s] Nodes joined: $CURRENT/4"
-  sleep 10
-  ELAPSED=$((ELAPSED + 10))
+  sleep 5  # Check every 5 seconds instead of 10
+  ELAPSED=$((ELAPSED + 5))
 done
 
 FINAL_COUNT=$(kubectl get nodes --no-headers | wc -l)
@@ -125,8 +125,8 @@ kubectl patch deployment strimzi-cluster-operator -n kafka --type=json -p='[
   }
 ]' || echo "Note: Affinity patch failed (may already exist)"
 
-echo "Waiting for Strimzi Operator to be ready (timeout: 5 minutes)..."
-kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || {
+echo "Waiting for Strimzi Operator to be ready (timeout: 2 minutes)..."
+kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=120s || {
   echo "⚠️ Strimzi operator not ready within timeout"
   echo "Current pod status:"
   kubectl get pods -n kafka
@@ -145,7 +145,7 @@ kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
 
 echo "Waiting for ArgoCD to be ready..."
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s || true
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=120s || true
 
 echo "✅ ArgoCD installed"
 kubectl get pods -n argocd

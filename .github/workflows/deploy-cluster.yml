@@ -468,8 +468,8 @@ jobs:
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Waiting for cloud-init to install Strimzi and ArgoCD ==="
-          echo "This typically takes 3-5 minutes..."
-          sleep 180  # Give cloud-init time to run
+          echo "This typically takes 2-3 minutes..."
+          sleep 120  # 2 minutes should be enough for basic bootstrap
           
           echo "=== Checking cluster readiness ==="
           NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
@@ -492,8 +492,8 @@ jobs:
           echo "=== Checking Strimzi Operator ==="
           kubectl get pods -n kafka || echo "⚠️ Strimzi not ready yet"
           
-          # Wait for Strimzi if not ready
-          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
+          # Wait for Strimzi if not ready (2 minutes max)
+          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=120s || true
           kubectl get pods -n kafka
       
       - name: Verify ArgoCD Installation  
@@ -503,8 +503,8 @@ jobs:
           echo "=== Checking ArgoCD ==="
           kubectl get pods -n argocd || echo "⚠️ ArgoCD not ready yet"
           
-          # Wait for ArgoCD if not ready
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s || true
+          # Wait for ArgoCD if not ready (2 minutes max)
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=120s || true
           kubectl get pods -n argocd
       
       - name: Verify ArgoCD Parent Application
@@ -611,15 +611,15 @@ jobs:
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
-          echo "=== Waiting for Kafka cluster deployment (up to 10 minutes) ==="
+          echo "=== Waiting for Kafka cluster deployment (up to 5 minutes) ==="
           
           # Wait for Kafka resource to exist
-          TIMEOUT=600
+          TIMEOUT=300  # 5 minutes is realistic for ArgoCD sync + Kafka deployment
           ELAPSED=0
           until kubectl get kafka -n kafka trading-cluster 2>/dev/null || [ $ELAPSED -ge $TIMEOUT ]; do
             echo "[$ELAPSED/$TIMEOUT s] Waiting for Kafka resource..."
-            sleep 15
-            ELAPSED=$((ELAPSED + 15))
+            sleep 10  # Check every 10 seconds
+            ELAPSED=$((ELAPSED + 10))
           done
           
           if ! kubectl get kafka -n kafka trading-cluster 2>/dev/null; then
@@ -640,9 +640,9 @@ jobs:
           
           # Wait for Kafka pods to be ready (REQUIRED)
           echo ""
-          echo "Waiting for Kafka broker pods to be ready..."
-          if ! kubectl wait --for=condition=ready pod -l strimzi.io/cluster=trading-cluster -n kafka --timeout=300s; then
-            echo "❌ FATAL: Kafka pods not ready after 5 minutes"
+          echo "Waiting for Kafka broker pods to be ready (up to 3 minutes)..."
+          if ! kubectl wait --for=condition=ready pod -l strimzi.io/cluster=trading-cluster -n kafka --timeout=180s; then
+            echo "❌ FATAL: Kafka pods not ready after 3 minutes"
             echo ""
             echo "=== Kafka Pod Status ==="
             kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
