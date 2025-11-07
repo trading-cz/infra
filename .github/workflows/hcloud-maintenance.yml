@@ -22,6 +22,7 @@ jobs:
 
     steps:
       - name: Install hcloud CLI
+        if: ${{ inputs.action != 'list' }}
         run: |
           curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
           chmod +x hcloud
@@ -77,6 +78,7 @@ jobs:
           echo "💡 Tip: Primary IPs persist after VM destruction"
           echo "   Cost: €0.50/month each (€1.00 total)"
           echo "========================================="
+      
       # ---------- DESTROY CLUSTER (keep Primary IPs) ----------
       - name: Destroy cluster (keep Primary IPs for reuse)
         if: ${{ inputs.action == 'destroy-cluster' }}
