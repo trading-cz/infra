@@ -58,8 +58,9 @@ resource "hcloud_server" "kafka_nodes" {
   image       = "ubuntu-24.04"
   location    = var.location
   ssh_keys    = [var.ssh_key_id]
-  # All kafka nodes get firewall (kafka-0 has public IP for external Kafka access)
-  firewall_ids = [var.firewall_id]
+  # kafka-0 has no firewall for external Kafka access (protected by NodePort)
+  # kafka-1 and kafka-2 have firewall for security (no public IP anyway)
+  firewall_ids = count.index == 0 ? [] : [var.firewall_id]
 
   labels = var.labels
 
