@@ -36,11 +36,21 @@ jobs:
         with:
           fetch-depth: 0  # Full history for better analysis
 
-      # Cache Docker images (helps with rapid commits)
+      # Set up Docker Buildx with GitHub Actions cache support
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # MegaLinter
+      # Pre-warm Docker image cache from GitHub Actions cache
+      # This significantly speeds up image pulls on subsequent runs
+      - name: Cache Docker image layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-megalinter-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-megalinter-
+
+      # MegaLinter with cached Docker image
       - name: MegaLinter
         # Using terraform flavor for optimized Terraform linting
         # More info at https://megalinter.io/latest/flavors/
@@ -61,6 +71,9 @@ jobs:
           TERRAFORM_TERRAFORM_VERSION: '1.13.4'
           # Disable linters with known issues
           DISABLE_LINTERS: JSON_ESLINT_PLUGIN_JSONC,MAKEFILE_CHECKMAKE,MARKDOWN_REMARK_LINT
+          # Use buildx cache for Docker layers
+          BUILDX_GHA_CACHE_FROM: type=gha
+          BUILDX_GHA_CACHE_TO: type=gha,mode=max
 
       # Upload MegaLinter artifacts
       - name: Archive production artifacts
