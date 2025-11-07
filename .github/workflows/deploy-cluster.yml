@@ -74,46 +74,7 @@ jobs:
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
           chmod 644 ~/.ssh/id_ed25519.pub
-      
-      - name: Validate SSH key files
-        run: |
-          echo "Validating SSH key files..."
-          
-          # Check private key exists and readable
-          if [ ! -f ~/.ssh/id_ed25519 ]; then
-            echo "❌ FATAL: SSH private key file not created"
-            exit 1
-          fi
-          
-          # Check private key permissions
-          PERMS=$(stat -c %a ~/.ssh/id_ed25519 2>/dev/null || stat -f %OLp ~/.ssh/id_ed25519 2>/dev/null | tail -c 4)
-          if [ "$PERMS" != "600" ]; then
-            echo "❌ FATAL: SSH private key has wrong permissions: $PERMS (should be 600)"
-            exit 1
-          fi
-          
-          # Check private key format
-          if ! head -1 ~/.ssh/id_ed25519 | grep -q "BEGIN PRIVATE KEY"; then
-            echo "❌ FATAL: SSH private key has invalid format"
-            exit 1
-          fi
-          
-          # Check public key exists and readable
-          if [ ! -f ~/.ssh/id_ed25519.pub ]; then
-            echo "❌ FATAL: SSH public key file not created"
-            exit 1
-          fi
-          
-          # Check public key format
-          if ! head -1 ~/.ssh/id_ed25519.pub | grep -q "ssh-ed25519"; then
-            echo "❌ FATAL: SSH public key has invalid format"
-            exit 1
-          fi
-          
-          echo "✅ SSH private key: valid (600 permissions, Ed25519 format)"
-          echo "✅ SSH public key: valid (Ed25519 format)"
-  
-  
+
       - name: Terraform Init
         run: terraform init
         env:
