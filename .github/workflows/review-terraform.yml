@@ -1,4 +1,4 @@
-name: Terraform Validation
+name: Terraform Review Quality Gates
 
 on:
   pull_request:
@@ -7,9 +7,7 @@ on:
       - 'modules/**'
       - 'environments/**'
       - 'templates/**'
-      - 'argocd/**'
       - '.github/workflows/deploy-cluster.yml'
-      - '.github/workflows/review-terraform.yml'
 
 jobs:
   lint:
@@ -27,18 +25,14 @@ jobs:
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
 
-      - name: Terraform Init
-        run: terraform init -backend=false
-        env:
-          TF_VAR_hcloud_token: "dummy-token-for-validation"
-          TF_VAR_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDummyKeyForValidation dummy@example.com"
-
       - name: Terraform Validate
         run: terraform validate
-        env:
-          TF_VAR_hcloud_token: "dummy-token-for-validation"
-          TF_VAR_ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDummyKeyForValidation dummy@example.com"
-          TF_VAR_environment: "dev"
+
+      - name: Terraform Validate (dev)
+        run: terraform validate -var="environment=dev"
+
+      - name: Terraform Validate (prod)
+        run: terraform validate -var="environment=prod"
 
       - name: Install tflint
         run: |

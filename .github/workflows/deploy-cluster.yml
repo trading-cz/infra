@@ -19,6 +19,9 @@ jobs:
     name: Deploy Cluster - ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:
+      control_plane_ip: ${{ steps.tf_outputs.outputs.control_plane_ip }}
+      kafka_external_ip: ${{ steps.tf_outputs.outputs.kafka_external_ip }}
     
     steps:
       - name: Checkout code
@@ -189,9 +192,143 @@ jobs:
             echo "  - Use only when discontinuing environment" >> $GITHUB_STEP_SUMMARY
           fi
 
+  verify-external-access:
+    name: Verify External Connectivity
+    needs: terraform
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Get Terraform outputs
+        id: get_outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-outputs-${{ inputs.environment }}
+          path: .
+        continue-on-error: true
+      
+      - name: Extract IPs from terraform job
+        id: ips
+        run: |
+          # These will be passed from the terraform job
+          echo "control_plane_ip=${{ needs.terraform.outputs.control_plane_ip }}" >> $GITHUB_OUTPUT
+          echo "kafka_external_ip=${{ needs.terraform.outputs.kafka_external_ip }}" >> $GITHUB_OUTPUT
+      
+      - name: Test Control Plane Connectivity
+        run: |
+          CONTROL_IP="${{ needs.terraform.outputs.control_plane_ip }}"
+          
+          echo "=== Testing Control Plane ($CONTROL_IP) ==="
+          
+          # Test SSH (port 22)
+          echo -n "SSH (22): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/22" 2>/dev/null; then
+            echo "✅ OPEN"
+          else
+            echo "❌ CLOSED"
+          fi
+          
+          # Test Kubernetes API (port 6443)
+          echo -n "K8s API (6443): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/6443" 2>/dev/null; then
+            echo "✅ OPEN"
+          else
+            echo "❌ CLOSED"
+          fi
+          
+          # Test HTTP (port 80)
+          echo -n "HTTP (80): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/80" 2>/dev/null; then
+            echo "✅ OPEN"
+          else
+            echo "❌ CLOSED"
+          fi
+          
+          # Test HTTPS (port 443)
+          echo -n "HTTPS (443): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/443" 2>/dev/null; then
+            echo "✅ OPEN"
+          else
+            echo "❌ CLOSED"
+          fi
+      
+      - name: Test Kafka External Connectivity
+        run: |
+          KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
+          
+          echo "=== Testing Kafka External Access ($KAFKA_IP) ==="
+          
+          # Test SSH (port 22)
+          echo -n "SSH (22): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
+            echo "✅ OPEN"
+          else
+            echo "❌ CLOSED"
+          fi
+          
+          # Test Kafka NodePort (port 32100)
+          echo -n "Kafka NodePort (32100): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null; then
+            echo "✅ OPEN"
+          else
+            echo "❌ CLOSED - Kafka external access not available!"
+          fi
+          
+          # Test Kafka internal ports (should be closed externally)
+          echo -n "Kafka Internal (9092): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
+            echo "⚠️ OPEN - Should be internal only!"
+          else
+            echo "✅ CLOSED (correct - internal only)"
+          fi
+      
+      - name: Connectivity Summary
+        if: always()
+        run: |
+          CONTROL_IP="${{ needs.terraform.outputs.control_plane_ip }}"
+          KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
+          
+          echo "## 🌐 External Connectivity Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Control Plane: \`$CONTROL_IP\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test and report each port
+          for PORT in 22 6443 80 443; do
+            if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/$PORT" 2>/dev/null; then
+              echo "- ✅ Port $PORT: **OPEN**" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- ❌ Port $PORT: **CLOSED**" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Kafka External: \`$KAFKA_IP\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Test Kafka port
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null; then
+            echo "- ✅ Port 32100 (NodePort): **OPEN** 🎉" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Connect to Kafka**:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$KAFKA_IP:32100" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ Port 32100 (NodePort): **CLOSED**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Issue**: Kafka external access not available. Check firewall configuration." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check internal port is properly blocked
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
+            echo "- ⚠️ Port 9092 (Internal): **OPEN** - Should be blocked!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ Port 9092 (Internal): **CLOSED** (correct)" >> $GITHUB_STEP_SUMMARY
+          fi
+
   post-setup:
     name: Verify Cluster Bootstrap
-    needs: terraform
+    needs: [terraform, verify-external-access]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     
