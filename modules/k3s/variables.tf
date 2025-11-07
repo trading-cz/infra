@@ -23,8 +23,13 @@ variable "control_plane_user_data" {
   type        = string
 }
 
-variable "worker_user_data" {
-  description = "User data for worker initialization"
+variable "k3s_version" {
+  description = "K3s version to install"
+  type        = string
+}
+
+variable "k3s_token" {
+  description = "K3s cluster token for node authentication"
   type        = string
 }
 
@@ -82,7 +87,7 @@ variable "app_node_count" {
 variable "app_server_type" {
   description = "Type of application worker server"
   type        = string
-  default     = "cx22" # Budget: 2 vCPU, 4GB RAM, x86_64
+  default     = "cx23" # Budget: 2 vCPU, 4GB RAM, x86_64
 }
 
 variable "app_user_data" {

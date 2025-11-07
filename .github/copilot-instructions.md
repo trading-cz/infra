@@ -21,7 +21,7 @@
 - **Kubernetes**: K3s v1.34.1+k3s1
 - **Message Broker**: Kafka 4.0.0 (Strimzi, KRaft mode)
 - **GitOps**: ArgoCD (planned), Kustomize overlays
-- **Cloud**: Hetzner (Nuremberg), CPX21/CPX31 VMs
+- **Cloud**: Hetzner (Nuremberg), cx23 VMs (2 vCPU, 4GB RAM)
 - **Network**: Private 10.0.1.0/24 + 2 Primary IPv4s (€1/mo)
 
 ---
@@ -29,15 +29,15 @@
 ## Architecture (4 nodes)
 
 ```
-k3s-control (CPX21): Primary IP #1 + 10.0.1.10
+k3s-control (cx23): Primary IP #1 + 10.0.1.10
 ├─ K3s control plane, ArgoCD, Python apps
 └─ Firewall: disabled (testing)
 
-kafka-0 (CPX31): Primary IP #2 + 10.0.1.20
+kafka-0 (cx23): Primary IP #2 + 10.0.1.20
 ├─ Kafka broker, Prometheus
 └─ External Kafka access via NodePort 32100
 
-kafka-1/kafka-2 (CPX31): 10.0.1.21-22 (private only)
+kafka-1/kafka-2 (cx23): 10.0.1.21-22 (private only)
 └─ Kafka brokers (no public IP = cost saving)
 ```
 
@@ -59,7 +59,7 @@ kafka-1/kafka-2 (CPX31): 10.0.1.21-22 (private only)
 ```
 root/
 ├── main.tf, variables.tf, outputs.tf  # Root module
-├── environments/{dev,prod}.tfvars     # CPX21 vs CPX31 configs
+├── environments/{dev,prod}.tfvars     # cx23 server configs
 ├── modules/
 │   ├── network/    # VPC, firewall, Primary IPs
 │   ├── compute/    # SSH keys

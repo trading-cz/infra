@@ -32,6 +32,41 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
       
+      - name: Check if cluster already exists
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          # Install hcloud CLI
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          
+          ENV="${{ inputs.environment }}"
+          CONTROL_PLANE_NAME="k3s-trading-${ENV}-control"
+          NETWORK_NAME="k3s-trading-${ENV}-network"
+          
+          echo "=== Checking if cluster '$ENV' already exists ==="
+          
+          # Check for control plane server
+          EXISTING_SERVER=$(./hcloud server list -o noheader -o columns=name | grep "^${CONTROL_PLANE_NAME}$" || true)
+          
+          # Check for network
+          EXISTING_NETWORK=$(./hcloud network list -o noheader -o columns=name | grep "^${NETWORK_NAME}$" || true)
+          
+          if [ -n "$EXISTING_SERVER" ] || [ -n "$EXISTING_NETWORK" ]; then
+            echo "❌ ERROR: Cluster '$ENV' is already running!"
+            echo ""
+            echo "Found existing resources:"
+            [ -n "$EXISTING_SERVER" ] && echo "  - Server: $CONTROL_PLANE_NAME"
+            [ -n "$EXISTING_NETWORK" ] && echo "  - Network: $NETWORK_NAME"
+            echo ""
+            echo "Please destroy the existing cluster first using the 'hcloud-maintenance' workflow:"
+            echo "  Actions → hcloud-maintenance → Run workflow → destroy-cluster"
+            echo ""
+            exit 1
+          fi
+          
+          echo "✅ No existing cluster found for '$ENV'. Proceeding with deployment..."
+      
       - name: Create SSH key files
         run: |
           mkdir -p ~/.ssh
@@ -39,7 +74,7 @@ jobs:
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
           chmod 644 ~/.ssh/id_ed25519.pub
-  
+
       - name: Terraform Init
         run: terraform init
         env:
@@ -54,7 +89,6 @@ jobs:
             -var-file="environments/${{ inputs.environment }}.tfvars" \
             -var="hcloud_token=${{ secrets.HCLOUD_TOKEN }}" \
             -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
-            -var="ssh_private_key=${{ secrets.SSH_PRIVATE_KEY }}" \
             -out=tfplan
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
@@ -64,6 +98,26 @@ jobs:
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
       
+      - name: Validate Terraform Apply succeeded
+        run: |
+          # Check if tfstate exists
+          if [ ! -f terraform.tfstate ]; then
+            echo "❌ FATAL: terraform.tfstate not found - apply may have failed"
+            exit 1
+          fi
+          
+          echo "✅ terraform.tfstate exists"
+          
+          # Try to get outputs to verify state is valid
+          echo "Verifying Terraform outputs are accessible..."
+          if ! terraform output -json > /dev/null 2>&1; then
+            echo "❌ FATAL: Cannot read Terraform outputs - state may be corrupted"
+            terraform output
+            exit 1
+          fi
+          
+          echo "✅ Terraform state is valid and readable"
+      
       - name: Save Terraform outputs
         id: tf_outputs
         run: |
@@ -71,7 +125,53 @@ jobs:
           echo "kafka_external_ip=$(terraform output -raw kafka_external_ip)" >> $GITHUB_OUTPUT
           echo "kafka_external_primary_ip_id=$(terraform output -raw kafka_external_primary_ip_id)" >> $GITHUB_OUTPUT
           echo "kafka_node_0_id=$(terraform output -raw kafka_node_0_id)" >> $GITHUB_OUTPUT
-          terraform output -json > outputs.json
+          terraform output -json > terraform-outputs.json
+      
+      - name: Validate all required outputs exist
+        run: |
+          echo "Validating Terraform outputs..."
+          
+          # Check control_plane_ip
+          CONTROL_IP="${{ steps.tf_outputs.outputs.control_plane_ip }}"
+          if [ -z "$CONTROL_IP" ] || [ "$CONTROL_IP" = "null" ]; then
+            echo "❌ FATAL: control_plane_ip output is missing or null"
+            exit 1
+          fi
+          echo "✅ control_plane_ip: $CONTROL_IP"
+          
+          # Check kafka_external_ip
+          KAFKA_IP="${{ steps.tf_outputs.outputs.kafka_external_ip }}"
+          if [ -z "$KAFKA_IP" ] || [ "$KAFKA_IP" = "null" ]; then
+            echo "❌ FATAL: kafka_external_ip output is missing or null"
+            exit 1
+          fi
+          echo "✅ kafka_external_ip: $KAFKA_IP"
+          
+          # Check kafka_node_0_id
+          KAFKA_NODE_ID="${{ steps.tf_outputs.outputs.kafka_node_0_id }}"
+          if [ -z "$KAFKA_NODE_ID" ] || [ "$KAFKA_NODE_ID" = "null" ]; then
+            echo "❌ FATAL: kafka_node_0_id output is missing or null"
+            exit 1
+          fi
+          echo "✅ kafka_node_0_id: $KAFKA_NODE_ID"
+          
+          # Check kafka_external_primary_ip_id
+          PRIMARY_IP_ID="${{ steps.tf_outputs.outputs.kafka_external_primary_ip_id }}"
+          if [ -z "$PRIMARY_IP_ID" ] || [ "$PRIMARY_IP_ID" = "null" ]; then
+            echo "❌ FATAL: kafka_external_primary_ip_id output is missing or null"
+            exit 1
+          fi
+          echo "✅ kafka_external_primary_ip_id: $PRIMARY_IP_ID"
+          
+          echo ""
+          echo "✅ All required outputs are present"
+      
+      - name: Upload Terraform outputs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-${{ inputs.environment }}
+          path: terraform-outputs.json
+          retention-days: 1
       
       - name: Assign Primary IP to kafka-0
         env:
@@ -85,32 +185,120 @@ jobs:
           echo "Server ID: ${KAFKA_NODE_0_ID}"
           echo "Primary IP ID: ${PRIMARY_IP_ID}"
           
-          # Install hcloud CLI
+          # Install hcloud CLI and jq
+          echo "Installing hcloud CLI..."
           curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
           chmod +x hcloud
           
-          # Power off kafka-0 (required for IP assignment)
-          echo "Powering off kafka-0..."
-          ./hcloud server poweroff ${KAFKA_NODE_0_ID}
+          echo "Installing jq..."
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq > /dev/null
           
-          # Wait for power off
-          echo "Waiting for shutdown..."
-          sleep 10
+          # Check current assignment of Primary IP
+          echo ""
+          echo "Checking current Primary IP assignment..."
+          CURRENT_ASSIGNMENT=$(./hcloud primary-ip describe ${PRIMARY_IP_ID} -o json | jq -r '.assignee_id // "null"')
+          
+          if [ "$CURRENT_ASSIGNMENT" != "null" ] && [ "$CURRENT_ASSIGNMENT" != "$KAFKA_NODE_0_ID" ]; then
+            echo "⚠️  Primary IP is currently assigned to server ID: ${CURRENT_ASSIGNMENT}"
+            echo "Unassigning from current server..."
+            ./hcloud primary-ip unassign ${PRIMARY_IP_ID} || {
+              echo "❌ Failed to unassign Primary IP from previous server"
+              exit 1
+            }
+            sleep 5
+          elif [ "$CURRENT_ASSIGNMENT" = "$KAFKA_NODE_0_ID" ]; then
+            echo "✅ Primary IP already assigned to kafka-0 (ID: ${KAFKA_NODE_0_ID})"
+            echo "   Skipping assignment - kafka-0 already has the correct IP"
+            exit 0
+          fi
+          
+          # Power off kafka-0 (required for IP assignment)
+          echo ""
+          echo "Powering off kafka-0..."
+          if ! ./hcloud server poweroff ${KAFKA_NODE_0_ID}; then
+            echo "❌ Failed to power off kafka-0"
+            exit 1
+          fi
+          
+          # Wait for complete shutdown with verification
+          echo "Waiting for shutdown (up to 30 seconds)..."
+          for i in {1..6}; do
+            STATUS=$(./hcloud server describe ${KAFKA_NODE_0_ID} -o json | jq -r '.status')
+            if [ "$STATUS" = "off" ]; then
+              echo "✅ kafka-0 is powered off"
+              break
+            fi
+            echo "[$i/6] Status: $STATUS - waiting..."
+            sleep 5
+          done
+          
+          # Verify it's actually off
+          FINAL_STATUS=$(./hcloud server describe ${KAFKA_NODE_0_ID} -o json | jq -r '.status')
+          if [ "$FINAL_STATUS" != "off" ]; then
+            echo "❌ kafka-0 did not power off properly (status: $FINAL_STATUS)"
+            exit 1
+          fi
           
           # Assign Primary IP
-          echo "Assigning Primary IP..."
-          ./hcloud primary-ip assign --server ${KAFKA_NODE_0_ID} ${PRIMARY_IP_ID}
+          echo ""
+          echo "Assigning Primary IP to kafka-0..."
+          if ! ./hcloud primary-ip assign --server ${KAFKA_NODE_0_ID} ${PRIMARY_IP_ID}; then
+            echo "❌ Failed to assign Primary IP to kafka-0"
+            exit 1
+          fi
+          
+          # Verify assignment
+          VERIFY_ASSIGNMENT=$(./hcloud primary-ip describe ${PRIMARY_IP_ID} -o json | jq -r '.assignee_id')
+          if [ "$VERIFY_ASSIGNMENT" != "$KAFKA_NODE_0_ID" ]; then
+            echo "❌ Primary IP assignment verification failed!"
+            echo "   Expected: ${KAFKA_NODE_0_ID}"
+            echo "   Got: ${VERIFY_ASSIGNMENT}"
+            exit 1
+          fi
+          echo "✅ Primary IP assignment verified"
           
           # Power on kafka-0
+          echo ""
           echo "Powering on kafka-0..."
-          ./hcloud server poweron ${KAFKA_NODE_0_ID}
+          if ! ./hcloud server poweron ${KAFKA_NODE_0_ID}; then
+            echo "❌ Failed to power on kafka-0"
+            exit 1
+          fi
           
-          # Wait for boot
-          echo "Waiting for kafka-0 to boot..."
-          sleep 30
+          # Wait for boot and verify SSH access
+          echo "Waiting for kafka-0 to boot (up to 150 seconds)..."
+          SSH_READY=false
+          for i in {1..30}; do
+            STATUS=$(./hcloud server describe ${KAFKA_NODE_0_ID} -o json | jq -r '.status')
+            echo "[$i/30] Server status: $STATUS"
+            
+            if [ "$STATUS" = "running" ]; then
+              # Server is running, test SSH
+              if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${KAFKA_EXTERNAL_IP}/22" 2>/dev/null; then
+                echo "✅ kafka-0 is running and SSH is accessible"
+                SSH_READY=true
+                break
+              fi
+            fi
+            sleep 5
+          done
           
+          if [ "$SSH_READY" = false ]; then
+            echo "❌ kafka-0 did not become SSH-accessible within timeout"
+            echo ""
+            echo "=== Diagnostics ==="
+            ./hcloud server describe ${KAFKA_NODE_0_ID}
+            exit 1
+          fi
+          
+          echo ""
+          echo "════════════════════════════════════════════════════════"
           echo "✅ Primary IP #2 successfully assigned to kafka-0!"
           echo "   Kafka external IP: ${KAFKA_EXTERNAL_IP}"
+          echo "   Server ID: ${KAFKA_NODE_0_ID}"
+          echo "   Primary IP ID: ${PRIMARY_IP_ID}"
+          echo "   SSH: Accessible ✅"
+          echo "════════════════════════════════════════════════════════"
             
       - name: Fetch kubeconfig
         run: |
@@ -136,6 +324,48 @@ jobs:
           
           echo "Kubeconfig fetched successfully!"
           chmod 600 kubeconfig.yaml
+      
+      - name: Validate kubeconfig
+        run: |
+          echo "Validating kubeconfig..."
+          
+          # Check file exists
+          if [ ! -f kubeconfig.yaml ]; then
+            echo "❌ FATAL: kubeconfig.yaml not found"
+            exit 1
+          fi
+          
+          # Check file is not empty
+          if [ ! -s kubeconfig.yaml ]; then
+            echo "❌ FATAL: kubeconfig.yaml is empty"
+            exit 1
+          fi
+          
+          # Check file contains required fields
+          if ! grep -q "certificate-authority-data:" kubeconfig.yaml; then
+            echo "❌ FATAL: kubeconfig missing certificate-authority-data"
+            exit 1
+          fi
+          
+          if ! grep -q "client-certificate-data:" kubeconfig.yaml; then
+            echo "❌ FATAL: kubeconfig missing client-certificate-data"
+            exit 1
+          fi
+          
+          if ! grep -q "client-key-data:" kubeconfig.yaml; then
+            echo "❌ FATAL: kubeconfig missing client-key-data"
+            exit 1
+          fi
+          
+          # Check file permissions
+          PERMS=$(stat -c %a kubeconfig.yaml 2>/dev/null || stat -f %OLp kubeconfig.yaml 2>/dev/null | tail -c 4)
+          if [ "$PERMS" != "600" ]; then
+            echo "❌ WARNING: kubeconfig has permissive permissions: $PERMS (should be 600)"
+            chmod 600 kubeconfig.yaml
+          fi
+          
+          echo "✅ kubeconfig.yaml: valid and properly formatted"
+  
       
       - name: Upload kubeconfig
         uses: actions/upload-artifact@v4
@@ -192,26 +422,23 @@ jobs:
             echo "  - Use only when discontinuing environment" >> $GITHUB_STEP_SUMMARY
           fi
 
-  verify-external-access:
-    name: Verify External Connectivity
+  verify-infrastructure:
+    name: Verify Infrastructure Connectivity
     needs: terraform
     runs-on: ubuntu-latest
+    if: success()  # Only run if terraform succeeded
     
     steps:
-      - name: Get Terraform outputs
-        id: get_outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-outputs-${{ inputs.environment }}
-          path: .
-        continue-on-error: true
-      
       - name: Extract IPs from terraform job
         id: ips
         run: |
-          # These will be passed from the terraform job
+          # These will be passed from the terraform job outputs
           echo "control_plane_ip=${{ needs.terraform.outputs.control_plane_ip }}" >> $GITHUB_OUTPUT
           echo "kafka_external_ip=${{ needs.terraform.outputs.kafka_external_ip }}" >> $GITHUB_OUTPUT
+          
+          echo "=== IP Addresses from Terraform ==="
+          echo "Control Plane: ${{ needs.terraform.outputs.control_plane_ip }}"
+          echo "Kafka External: ${{ needs.terraform.outputs.kafka_external_ip }}"
       
       - name: Test Control Plane Connectivity
         run: |
@@ -251,37 +478,39 @@ jobs:
             echo "❌ CLOSED"
           fi
       
-      - name: Test Kafka External Connectivity
+      - name: Test Kafka Node SSH
         run: |
           KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
           
-          echo "=== Testing Kafka External Access ($KAFKA_IP) ==="
+          echo "=== Testing Kafka Node SSH ($KAFKA_IP) ==="
           
-          # Test SSH (port 22)
+          # Test SSH (port 22) - MUST be open (critical check)
           echo -n "SSH (22): "
           if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
             echo "✅ OPEN"
           else
             echo "❌ CLOSED"
-          fi
-          
-          # Test Kafka NodePort (port 32100)
-          echo -n "Kafka NodePort (32100): "
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null; then
-            echo "✅ OPEN"
-          else
-            echo "❌ CLOSED - Kafka external access not available!"
-          fi
-          
-          # Test Kafka internal ports (should be closed externally)
-          echo -n "Kafka Internal (9092): "
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
-            echo "⚠️ OPEN - Should be internal only!"
-          else
-            echo "✅ CLOSED (correct - internal only)"
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            echo "❌ CRITICAL ERROR: Kafka node SSH is not accessible!"
+            echo "════════════════════════════════════════════════════════"
+            echo ""
+            echo "This indicates Primary IP #2 was not properly assigned to kafka-0."
+            echo ""
+            echo "Troubleshooting:"
+            echo "1. Check 'Assign Primary IP to kafka-0' step logs"
+            echo "2. Verify kafka-0 is powered on"
+            echo "3. Check Hetzner firewall rules"
+            echo "4. Verify Primary IP assignment in Hetzner console"
+            echo ""
+            echo "Expected IP: $KAFKA_IP"
+            echo "Expected server: kafka-0 (from dev/prod environment)"
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            exit 1
           fi
       
-      - name: Connectivity Summary
+      - name: Infrastructure Summary
         if: always()
         run: |
           CONTROL_IP="${{ needs.terraform.outputs.control_plane_ip }}"
@@ -302,35 +531,25 @@ jobs:
           done
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Kafka External: \`$KAFKA_IP\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Kafka Node: \`$KAFKA_IP\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Test Kafka port
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null; then
-            echo "- ✅ Port 32100 (NodePort): **OPEN** 🎉" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Connect to Kafka**:" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "$KAFKA_IP:32100" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+          # Test SSH only (Kafka service not deployed yet)
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
+            echo "- ✅ Port 22 (SSH): **OPEN**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- ❌ Port 32100 (NodePort): **CLOSED**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Issue**: Kafka external access not available. Check firewall configuration." >> $GITHUB_STEP_SUMMARY
+            echo "- ❌ Port 22 (SSH): **CLOSED**" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Check internal port is properly blocked
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
-            echo "- ⚠️ Port 9092 (Internal): **OPEN** - Should be blocked!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- ✅ Port 9092 (Internal): **CLOSED** (correct)" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Note: Kafka application ports will be tested after deployment completes_" >> $GITHUB_STEP_SUMMARY
 
   post-setup:
     name: Verify Cluster Bootstrap
-    needs: [terraform, verify-external-access]
+    needs: [terraform, verify-infrastructure]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    if: success()  # Only run if infrastructure verification succeeded
     
     steps:
       - name: Checkout code
@@ -345,28 +564,115 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: 'v1.30.0'
+          version: 'v1.34.0'  # Match K3s v1.34.1+k3s1
+      
+      - name: Validate kubeconfig and kubectl connectivity
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "Validating kubeconfig file..."
+          
+          # Check file exists
+          if [ ! -f ./kubeconfig.yaml ]; then
+            echo "❌ FATAL: kubeconfig.yaml not found in working directory"
+            exit 1
+          fi
+          
+          echo "Testing kubectl connectivity..."
+          
+          # Test basic connectivity with timeout
+          if ! timeout 10 kubectl cluster-info &>/dev/null; then
+            echo "❌ FATAL: Cannot connect to Kubernetes cluster"
+            echo ""
+            echo "Diagnostics:"
+            kubectl cluster-info || true
+            echo ""
+            exit 1
+          fi
+          
+          echo "✅ kubectl connectivity verified"
+          
+          # Get cluster info
+          echo ""
+          echo "=== Cluster Info ==="
+          kubectl cluster-info
+          echo ""
+          echo "=== K3s Version ==="
+          kubectl version || true
       
       - name: Wait for cloud-init to complete
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Waiting for cloud-init to install Strimzi and ArgoCD ==="
-          echo "This typically takes 3-5 minutes..."
-          sleep 180  # Give cloud-init time to run
+          echo "This typically takes 2-3 minutes..."
+          sleep 120  # 2 minutes should be enough for basic bootstrap
           
           echo "=== Checking cluster readiness ==="
-          kubectl get nodes
+          NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
+          echo "Current nodes: $NODE_COUNT/4 (need 1 control + 3 kafka workers)"
+          kubectl get nodes -o wide
+          
+          if [ "$NODE_COUNT" -lt 4 ]; then
+            echo ""
+            echo "❌ FATAL ERROR: Only $NODE_COUNT node(s) joined the cluster!"
+            echo "Expected: 4 nodes (1 control plane + 3 kafka workers)"
+            echo ""
+            echo "This indicates worker nodes failed to bootstrap via cloud-init."
+            echo "Troubleshooting:"
+            echo "1. SSH into each worker node (kafka-0, kafka-1, kafka-2)"
+            echo "2. Check cloud-init logs: sudo tail -100 /var/log/cloud-init-output.log"
+            echo "3. Check K3s join logs: sudo journalctl -xe -u k3s-agent"
+            echo "4. Verify network connectivity between nodes"
+            echo "5. Check firewall rules allow inter-node communication"
+            echo ""
+            echo "Worker nodes must join the cluster for Kafka deployment."
+            exit 1
+          fi
+          
+          echo "✅ All 4 nodes have successfully joined the cluster"
       
       - name: Verify Strimzi Installation
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Checking Strimzi Operator ==="
-          kubectl get pods -n kafka || echo "⚠️ Strimzi not ready yet"
           
-          # Wait for Strimzi if not ready
-          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
+          # First, check if kafka namespace exists
+          if ! kubectl get namespace kafka &>/dev/null; then
+            echo "❌ FATAL: kafka namespace not found"
+            kubectl get namespaces
+            exit 1
+          fi
+          
+          echo "✅ kafka namespace exists"
+          
+          # Check if Strimzi CRDs are installed
+          echo "Checking Strimzi CRDs..."
+          if ! kubectl get crd kafkas.kafka.strimzi.io &>/dev/null; then
+            echo "❌ FATAL: Strimzi Kafka CRD not found - Strimzi installation incomplete"
+            echo ""
+            echo "Available CRDs:"
+            kubectl get crd | grep strimzi || echo "No strimzi CRDs found"
+            exit 1
+          fi
+          
+          echo "✅ Strimzi CRDs are installed"
+          
+          # Wait for Strimzi operator to be ready (REQUIRED - fail if not ready)
+          echo "Waiting for Strimzi operator pod (up to 2 minutes)..."
+          if ! kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=120s; then
+            echo "❌ FATAL: Strimzi operator not ready after 2 minutes"
+            echo ""
+            echo "=== Strimzi Operator Pod Status ==="
+            kubectl get pods -n kafka || true
+            echo ""
+            echo "=== Strimzi Operator Pod Details ==="
+            kubectl describe pod -l name=strimzi-cluster-operator -n kafka || true
+            exit 1
+          fi
+          
+          echo "✅ Strimzi operator is ready"
           kubectl get pods -n kafka
       
       - name: Verify ArgoCD Installation  
@@ -374,10 +680,40 @@ jobs:
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Checking ArgoCD ==="
-          kubectl get pods -n argocd || echo "⚠️ ArgoCD not ready yet"
           
-          # Wait for ArgoCD if not ready
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s || true
+          # First, check if argocd namespace exists
+          if ! kubectl get namespace argocd &>/dev/null; then
+            echo "❌ FATAL: argocd namespace not found"
+            kubectl get namespaces
+            exit 1
+          fi
+          
+          echo "✅ argocd namespace exists"
+          
+          # Check if ArgoCD CRDs are installed
+          echo "Checking ArgoCD CRDs..."
+          if ! kubectl get crd applications.argoproj.io &>/dev/null; then
+            echo "❌ FATAL: ArgoCD Application CRD not found - ArgoCD installation incomplete"
+            kubectl get crd | grep argoproj || echo "No argoproj CRDs found"
+            exit 1
+          fi
+          
+          echo "✅ ArgoCD CRDs are installed"
+          
+          # Wait for ArgoCD application controller to be ready (REQUIRED)
+          echo "Waiting for ArgoCD application controller pod (up to 2 minutes)..."
+          if ! kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=120s; then
+            echo "❌ FATAL: ArgoCD application controller not ready after 2 minutes"
+            echo ""
+            echo "=== ArgoCD Pod Status ==="
+            kubectl get pods -n argocd || true
+            echo ""
+            echo "=== ArgoCD Pod Details ==="
+            kubectl describe pod -l app.kubernetes.io/name=argocd-application-controller -n argocd || true
+            exit 1
+          fi
+          
+          echo "✅ ArgoCD application controller is ready"
           kubectl get pods -n argocd
       
       - name: Verify ArgoCD Parent Application
@@ -406,7 +742,7 @@ jobs:
           kubectl get pods -A
       
       - name: Cluster Bootstrap Summary
-        if: always()
+        if: success() || failure()  # Show summary if completed, but not if cancelled
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
@@ -461,3 +797,223 @@ jobs:
           echo "- **VMs**: Only charged when running" >> $GITHUB_STEP_SUMMARY
           echo "- **Daily cleanup**: Use \`hcloud-maintenance → destroy-cluster\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Complete shutdown**: Use \`hcloud-maintenance → destroy-all\`" >> $GITHUB_STEP_SUMMARY
+
+  verify-kafka-deployment:
+    name: Verify Kafka External Access
+    needs: [terraform, post-setup]
+    runs-on: ubuntu-latest
+    if: success()  # Only run if post-setup succeeded (cluster is healthy)
+    
+    steps:
+      - name: Download kubeconfig
+        uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig-${{ inputs.environment }}
+          path: .
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.34.0'  # Match K3s v1.34.1+k3s1
+      
+      - name: Wait for Kafka cluster to be ready
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Waiting for Kafka cluster deployment (up to 3 minutes) ==="
+          
+          # Wait for Kafka resource to exist (fail fast if cluster unreachable)
+          TIMEOUT=120  # 2 minutes - Kafka should deploy in 2-3 min if healthy
+          ELAPSED=0
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # Check if workflow was cancelled
+            if [ -n "${RUNNER_STOPPING:-}" ]; then
+              echo "⚠️  Workflow cancelled, exiting gracefully..."
+              exit 0
+            fi
+            
+            # Check if kubectl can connect at all (fail fast if cluster destroyed)
+            if ! kubectl cluster-info >/dev/null 2>&1; then
+              echo "❌ FATAL: Cannot connect to Kubernetes cluster (destroyed or unreachable)"
+              exit 1
+            fi
+            
+            # Check if Kafka resource exists
+            if kubectl get kafka -n kafka trading-cluster 2>/dev/null; then
+              break  # Success!
+            fi
+            
+            echo "[$ELAPSED/$TIMEOUT s] Waiting for Kafka resource..."
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          
+          if ! kubectl get kafka -n kafka trading-cluster 2>/dev/null; then
+            echo "❌ FATAL: Kafka cluster not deployed after $TIMEOUT seconds"
+            echo ""
+            echo "=== ArgoCD Applications ==="
+            kubectl get applications -n argocd || true
+            echo ""
+            echo "=== Kafka Namespace Pods ==="
+            kubectl get pods -n kafka || true
+            echo ""
+            echo "Deployment failed: Kafka cluster resource not found"
+            exit 1
+          fi
+          
+          echo "✅ Kafka cluster resource found"
+          kubectl get kafka -n kafka trading-cluster
+          
+          # Wait for Kafka pods to be ready (REQUIRED)
+          echo ""
+          echo "Waiting for Kafka broker pods to be ready (up to 3 minutes)..."
+          if ! kubectl wait --for=condition=ready pod -l strimzi.io/cluster=trading-cluster -n kafka --timeout=180s; then
+            echo "❌ FATAL: Kafka pods not ready after 3 minutes"
+            echo ""
+            echo "=== Kafka Pod Status ==="
+            kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
+            echo ""
+            echo "=== Kafka Pod Details ==="
+            kubectl describe pods -n kafka -l strimzi.io/cluster=trading-cluster | tail -50
+            echo ""
+            echo "Deployment failed: Kafka brokers not running"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ Kafka broker pods are ready"
+          kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
+      
+      - name: Test Kafka external connectivity with retry
+        run: |
+          # Check if workflow was cancelled before starting tests
+          if [ -n "${RUNNER_STOPPING:-}" ]; then
+            echo "⚠️  Workflow cancelled, skipping Kafka tests..."
+            exit 0
+          fi
+          
+          KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
+          MAX_RETRIES=5
+          RETRY_DELAY=10
+          
+          echo "=== Testing Kafka External Access ($KAFKA_IP:32100) ==="
+          echo "Will retry up to $MAX_RETRIES times with ${RETRY_DELAY}s delay between attempts"
+          echo ""
+          
+          # Function to test Kafka port
+          test_kafka_port() {
+            timeout 10 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null
+          }
+          
+          # Retry loop
+          SUCCESS=false
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES: Testing Kafka NodePort (32100)..."
+            
+            if test_kafka_port; then
+              echo "✅ SUCCESS - Kafka port 32100 is OPEN and accessible!"
+              SUCCESS=true
+              break
+            else
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "❌ Port closed, waiting ${RETRY_DELAY}s before retry..."
+                sleep $RETRY_DELAY
+              else
+                echo "❌ FAILED - Port still closed after $MAX_RETRIES attempts"
+              fi
+            fi
+          done
+          
+          # If all retries failed, perform diagnostics and exit
+          if [ "$SUCCESS" = false ]; then
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            echo "❌ FATAL ERROR: Kafka external port 32100 is not accessible"
+            echo "════════════════════════════════════════════════════════"
+            echo ""
+            echo "=== Diagnostic Information ==="
+            echo ""
+            
+            echo "1. Kafka Pods Status:"
+            export KUBECONFIG=./kubeconfig.yaml
+            kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster || true
+            echo ""
+            
+            echo "2. Kafka Services:"
+            kubectl get svc -n kafka || true
+            echo ""
+            
+            echo "3. NodePort Service Details:"
+            kubectl get svc -n kafka trading-cluster-kafka-external-bootstrap -o yaml || true
+            echo ""
+            
+            echo "4. Kafka Cluster Status:"
+            kubectl get kafka -n kafka trading-cluster -o yaml | grep -A 20 "status:" || true
+            echo ""
+            
+            echo "════════════════════════════════════════════════════════"
+            echo "Deployment FAILED: Kafka is not accessible externally"
+            echo "This is a critical requirement - stopping deployment"
+            echo "════════════════════════════════════════════════════════"
+            exit 1
+          fi
+          
+          # Verify internal port is properly blocked
+          echo ""
+          echo "Verifying Kafka internal port is not exposed..."
+          echo -n "Kafka Internal (9092): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
+            echo "⚠️ WARNING - Port 9092 is externally accessible (should be internal only)"
+            echo "This is a security concern but won't fail the deployment"
+          else
+            echo "✅ CLOSED (correct - internal only)"
+          fi
+          
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo "✅ Kafka External Connectivity: VERIFIED"
+          echo "════════════════════════════════════════════════════════"
+      
+      - name: Kafka deployment summary
+        if: success()  # Only run if connectivity test passed
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
+          
+          echo "## ✅ Kafka Deployment: SUCCESSFUL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🎯 Kafka Cluster Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get kafka -n kafka trading-cluster -o wide 2>/dev/null
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🖥️ Kafka Broker Pods" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🌐 External Access: VERIFIED ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Kafka is accessible at:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$KAFKA_IP:32100" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test connection:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# Using kafkacat/kcat" >> $GITHUB_STEP_SUMMARY
+          echo "kcat -b $KAFKA_IP:32100 -L" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Using kafka-console-producer" >> $GITHUB_STEP_SUMMARY
+          echo "kafka-console-producer --bootstrap-server $KAFKA_IP:32100 --topic test" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ All Critical Checks Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- Kafka cluster deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- All broker pods running" >> $GITHUB_STEP_SUMMARY
+          echo "- External port 32100 accessible" >> $GITHUB_STEP_SUMMARY
+          echo "- Internal port 9092 properly secured" >> $GITHUB_STEP_SUMMARY

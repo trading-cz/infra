@@ -15,14 +15,14 @@ Ephemeral K3s clusters for algorithmic trading. Persistent IPv4s, cost-optimized
 ├───────────────────────────────────────────────────────┤
 │                                                       │
 │    ┌────────────────────────────────────────────┐     │
-│    │ Control Plane (CPX21)                      │     │
+│    │ Control Plane (cx23)                       │     │
 │    │ • Primary IP #1: public (ArgoCD, SSH)      │     │
 │    │ • Private IP: 10.0.1.10                    │     │
 │    │ • Runs ArgoCD, K3S                         │     │
 │    └────────────────────────────────────────────┘     │
 │                                                       │
 │    ┌────────────────────────────────────────────┐     │
-│    │ Kafka-0 (CPX21)                            │     │
+│    │ Kafka-0 (cx23)                             │     │
 │    │ • Primary IP #2: public (Kafka NodePort)   │     │
 │    │ • Private IP: 10.0.1.20                    │     │
 │    │ • Kafka broker, Prometheus                 │     │

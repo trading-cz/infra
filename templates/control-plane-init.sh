@@ -32,12 +32,65 @@ done
 echo "=== K3s Control Plane Ready ==="
 kubectl get nodes
 
-# Taint control plane to prevent regular workloads from scheduling here
-# Only ArgoCD and system components should run on control plane
-echo "Adding taint to control plane to prevent regular workloads..."
-kubectl taint nodes --all node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite || true
+# Wait for worker nodes to join before installing workloads
+echo ""
+echo "=== Waiting for worker nodes to join cluster ==="
+echo "Expected: 3 kafka workers + 1 control plane = 4 nodes total"
+TIMEOUT=180  # 3 minutes - should be enough with proper firewall rules
+ELAPSED=0
+until [ $$(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $$ELAPSED -ge $$TIMEOUT ]; do
+  CURRENT=$$(kubectl get nodes --no-headers | wc -l)
+  echo "[$${ELAPSED}/$${TIMEOUT} s] Nodes joined: $${CURRENT}/4"
+  sleep 5  # Check every 5 seconds
+  ELAPSED=$$((ELAPSED + 5))
+done
 
-echo "✅ Control plane configured with NoSchedule taint"
+FINAL_COUNT=$$(kubectl get nodes --no-headers | wc -l)
+if [ $$FINAL_COUNT -ge 4 ]; then
+  echo "✅ All worker nodes joined! ($${FINAL_COUNT} nodes total)"
+  kubectl get nodes
+else
+  echo "❌ ERROR: Only $${FINAL_COUNT} nodes joined after $${TIMEOUT} s"
+  echo ""
+  kubectl get nodes
+  echo ""
+  echo "Expected: 4 nodes (1 control + 3 kafka workers)"
+  echo "Got: $${FINAL_COUNT} nodes"
+  echo ""
+  echo "TROUBLESHOOTING:"
+  echo "1. Check worker node cloud-init logs:"
+  echo "   - Get IPs: hcloud server list"
+  echo "   - SSH each: ssh root@<IP> 'tail -100 /var/log/cloud-init-output.log'"
+  echo ""
+  echo "2. Check K3s join errors:"
+  echo "   - ssh root@<worker-IP> 'journalctl -xe -u k3s-agent'"
+  echo ""
+  echo "3. Verify network:"
+  echo "   - ssh root@<worker-IP> 'ping 10.0.1.10' (test control plane)"
+  echo "   - ssh root@<worker-IP> 'curl -k https://10.0.1.10:6443/readyz' (test API)"
+  echo ""
+  echo "4. Check firewall rules:"
+  echo "   - hcloud firewall describe <firewall-id>"
+  echo "   - Ensure port 6443 + 10250 + 2379-2380 allowed from 10.0.1.0/24"
+  echo ""
+  exit 1
+fi
+
+# Taint control plane to prevent regular workloads from scheduling here
+echo ""
+echo "Adding taint to control plane..."
+kubectl taint nodes ${cluster_name}-${environment}-control node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite || true
+echo "✅ Control plane tainted - regular workloads will only run on worker nodes"
+
+# Label kafka nodes for Kafka pod scheduling
+echo ""
+echo "=== Labeling kafka nodes for workload placement ==="
+for node in $$(kubectl get nodes -o name | grep kafka); do
+  kubectl label $$node node-role.kubernetes.io/worker=true --overwrite || true
+  kubectl label $$node workload-type=kafka --overwrite || true
+done
+echo "✅ Kafka nodes labeled"
+kubectl get nodes --show-labels | grep -E 'NAME|kafka'
 
 # =============================================================================
 # INSTALL STRIMZI OPERATOR
@@ -45,12 +98,46 @@ echo "✅ Control plane configured with NoSchedule taint"
 echo ""
 echo "=== Installing Strimzi Operator ==="
 kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
-kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
 
-echo "Waiting for Strimzi Operator to be ready..."
-kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
+# Download Strimzi installation files
+echo "Downloading Strimzi manifests..."
+curl -sfL https://strimzi.io/install/latest?namespace=kafka -o /tmp/strimzi-install.yaml
 
-echo "✅ Strimzi Operator installed"
+# Apply Strimzi manifests
+echo "Applying Strimzi Operator..."
+kubectl apply -f /tmp/strimzi-install.yaml -n kafka
+
+# Patch Strimzi operator deployment to ensure it schedules on worker nodes
+echo "Configuring Strimzi operator node affinity..."
+kubectl patch deployment strimzi-cluster-operator -n kafka --type=json -p='[
+  {
+    "op": "add",
+    "path": "/spec/template/spec/affinity",
+    "value": {
+      "nodeAffinity": {
+        "preferredDuringSchedulingIgnoredDuringExecution": [{
+          "weight": 100,
+          "preference": {
+            "matchExpressions": [{
+              "key": "node-role.kubernetes.io/worker",
+              "operator": "Exists"
+            }]
+          }
+        }]
+      }
+    }
+  }
+]' || echo "Note: Affinity patch failed (may already exist)"
+
+echo "Waiting for Strimzi Operator to be ready (timeout: 2 minutes)..."
+kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=120s || {
+  echo "⚠️ Strimzi operator not ready within timeout"
+  echo "Current pod status:"
+  kubectl get pods -n kafka
+  kubectl describe pod -l name=strimzi-cluster-operator -n kafka | tail -20
+}
+
+echo "✅ Strimzi Operator installation complete"
 kubectl get pods -n kafka
 
 # =============================================================================
@@ -62,7 +149,7 @@ kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/core-install.yaml
 
 echo "Waiting for ArgoCD to be ready..."
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=300s || true
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=120s || true
 
 echo "✅ ArgoCD installed"
 kubectl get pods -n argocd
@@ -113,7 +200,7 @@ echo "  - Parent Application (App-of-Apps)"
 echo ""
 echo "ArgoCD will now sync applications from:"
 echo "  Repository: https://github.com/trading-cz/config.git"
-echo "  Branch: $TARGET_REVISION"
+echo "  Branch: $$TARGET_REVISION"
 echo "  Path: overlays/${environment}/app-of-apps"
 echo ""
 echo "Monitor deployment:"

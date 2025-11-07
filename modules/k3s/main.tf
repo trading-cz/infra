@@ -20,11 +20,6 @@ terraform {
 // K3s module: main.tf
 // This module provisions the K3s control plane and worker nodes
 
-resource "random_password" "k3s_token" {
-  length  = 32
-  special = false
-}
-
 resource "hcloud_server" "control_plane" {
   name        = var.control_plane_name
   server_type = var.control_plane_server_type
@@ -64,10 +59,11 @@ resource "hcloud_server" "kafka_nodes" {
   labels = var.labels
 
   public_net {
-    # IPv4 disabled - Primary IP #2 will be assigned by GitHub Actions
-    # kafka-1 and kafka-2 have no public IPv4 at all
-    ipv4_enabled = false
-    ipv6_enabled = false # IPv6 not needed - using private network for internal comms
+    # Ephemeral IPv4 enabled for cloud-init (apt-get update, K3s installer download)
+    # GitHub Actions will replace kafka-0's ephemeral IP with Primary IP #2 after deployment
+    # kafka-1 and kafka-2 keep their ephemeral IPs (€0 cost if destroyed daily within 1 hour)
+    ipv4_enabled = true
+    ipv6_enabled = false # IPv6 not needed
   }
 
   network {
@@ -75,7 +71,14 @@ resource "hcloud_server" "kafka_nodes" {
     ip         = "10.0.1.${20 + count.index}"
   }
 
-  user_data = var.worker_user_data
+  # Generate user_data with correct node IP for each kafka node
+  user_data = templatefile("${path.root}/templates/worker-init.sh", {
+    k3s_version = var.k3s_version
+    k3s_token   = var.k3s_token
+    k3s_url     = "https://${var.control_plane_ip}:6443"
+    node_ip     = "10.0.1.${20 + count.index}"
+    node_label  = "node-role.kubernetes.io/kafka=true"
+  })
 }
 
 resource "hcloud_server" "app_nodes" {
