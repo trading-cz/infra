@@ -6,7 +6,9 @@ echo "Node IP (private): ${node_ip}"
 echo "Cluster endpoint (private): ${k3s_url}"
 echo "Node label: ${node_label}"
 
-# Update system
+# Update system and install dependencies
+# NOTE: Kafka nodes have ephemeral public IPs during cloud-init
+# kafka-0's ephemeral IP will be replaced with Primary IP #2 by GitHub Actions after deployment
 apt-get update
 apt-get install -y curl
 
@@ -26,6 +28,16 @@ until curl -k ${k3s_url}/readyz &>/dev/null; do
     echo "  - K3s URL: ${k3s_url}"
     echo "  - Node IP: ${node_ip}"
     echo "  - Current time: $$(date)"
+    echo ""
+    echo "Network diagnostics:"
+    echo "  - IP address: $$(ip addr show dev eth0 | grep 'inet ' || echo 'N/A')"
+    echo "  - Private network: $$(ip addr show dev ens10 | grep 'inet ' || echo 'N/A')"
+    echo "  - Default route: $$(ip route | grep default || echo 'N/A')"
+    echo "  - DNS servers: $$(cat /etc/resolv.conf | grep nameserver || echo 'N/A')"
+    echo ""
+    echo "Control plane reachability:"
+    echo "  - Ping test: $$(ping -c 3 10.0.1.10 2>&1 | tail -3 || echo 'FAILED')"
+    echo "  - Port 6443 test: $$(timeout 3 bash -c '</dev/tcp/10.0.1.10/6443' 2>&1 && echo 'OPEN' || echo 'CLOSED/TIMEOUT')"
     echo ""
     echo "Possible causes:"
     echo "  1. Control plane is still booting (check: hcloud server list)"

@@ -2,19 +2,29 @@ provider "hcloud" {
   token = var.hcloud_token
 }
 
+# Generate K3s token if not provided
+resource "random_password" "k3s_token" {
+  length  = 32
+  special = false
+}
+
+locals {
+  k3s_token = var.k3s_token != "" ? var.k3s_token : random_password.k3s_token.result
+}
+
 module "k3s" {
   source                      = "./modules/k3s"
   environment                 = var.environment
   cluster_name                = var.cluster_name
   k3s_version                 = var.k3s_version
-  k3s_token                   = var.k3s_token
+  k3s_token                   = local.k3s_token
   control_plane_name          = "${var.cluster_name}-${var.environment}-control"
   control_plane_server_type   = var.control_plane_server_type
   control_plane_ip            = "10.0.1.10"
   control_plane_primary_ip_id = module.network.control_plane_primary_ip_id # Attach Primary IP #1
   control_plane_user_data = templatefile("${path.module}/templates/control-plane-init.sh", {
     k3s_version  = var.k3s_version
-    k3s_token    = var.k3s_token
+    k3s_token    = local.k3s_token
     node_ip      = "10.0.1.10"
     environment  = var.environment
     cluster_name = var.cluster_name
@@ -84,6 +94,13 @@ module "network" {
       port        = "2379-2380"
       source_ips  = ["10.0.1.0/24"]
       description = "Allow etcd (internal)"
+    },
+    {
+      direction   = "in"
+      protocol    = "udp"
+      port        = "8472"
+      source_ips  = ["10.0.1.0/24"]
+      description = "Allow Flannel VXLAN (K3s CNI)"
     },
     {
       direction   = "in"
