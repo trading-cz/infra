@@ -54,7 +54,6 @@ jobs:
             -var-file="environments/${{ inputs.environment }}.tfvars" \
             -var="hcloud_token=${{ secrets.HCLOUD_TOKEN }}" \
             -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
-            -var="ssh_private_key=${{ secrets.SSH_PRIVATE_KEY }}" \
             -out=tfplan
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
