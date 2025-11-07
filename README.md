@@ -105,12 +105,13 @@ K3s v1.34.1+k3s1 · Kafka 4.0.0 (Strimzi) · Terraform v1.13.4 · Hetzner Cloud
 - ✅ ArgoCD configured for GitOps
 
 # Expected output:
-# NAME                             STATUS   LABELS
-# k3s-trading-dev-control          Ready    node-role.kubernetes.io/control-plane=true,...
-# k3s-trading-dev-kafka-0          Ready    node-role.kubernetes.io/kafka=true,...
-# k3s-trading-dev-kafka-1          Ready    node-role.kubernetes.io/kafka=true,...
-# k3s-trading-dev-kafka-2          Ready    node-role.kubernetes.io/kafka=true,...
-# k3s-trading-dev-app-0            Ready    node-role.kubernetes.io/app=true,...
+| Names  | Status | Labels |
+|--------|--------|--------|
+| k3s-trading-dev-control  | Ready |   node-role.kubernetes.io/control-plane=true,... |
+| k3s-trading-dev-kafka-0  | Ready |   node-role.kubernetes.io/kafka=true,... |
+| k3s-trading-dev-kafka-1  | Ready |   node-role.kubernetes.io/kafka=true,... |
+| k3s-trading-dev-kafka-2  | Ready |  node-role.kubernetes.io/kafka=true,... |
+| k3s-trading-dev-app-0    | Ready |   node-role.kubernetes.io/app=true,... |
 
 
 ## License
