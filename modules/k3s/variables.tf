@@ -82,7 +82,7 @@ variable "app_node_count" {
 variable "app_server_type" {
   description = "Type of application worker server"
   type        = string
-  default     = "cx22" # Budget: 2 vCPU, 4GB RAM, x86_64
+  default     = "cx23" # Budget: 2 vCPU, 4GB RAM, x86_64
 }
 
 variable "app_user_data" {

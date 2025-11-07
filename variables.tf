@@ -34,7 +34,7 @@ variable "control_plane_server_type" {
 variable "kafka_server_type" {
   description = "Hetzner server type for Kafka nodes"
   type        = string
-  default     = "cx22" # 2 vCPU, 4GB RAM, x86_64 (consider cax21 ARM for upgrade)
+  default     = "cx23" # 2 vCPU, 4GB RAM, x86_64 (consider cax21 ARM for upgrade)
 }
 
 variable "kafka_node_count" {
@@ -50,7 +50,7 @@ variable "kafka_node_count" {
 variable "app_server_type" {
   description = "Hetzner server type for application worker nodes"
   type        = string
-  default     = "cx22" # 2 vCPU, 4GB RAM, x86_64 - cheapest available
+  default     = "cx23" # 2 vCPU, 4GB RAM, x86_64 - cheapest available
 }
 
 variable "app_node_count" {

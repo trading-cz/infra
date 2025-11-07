@@ -32,6 +32,41 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
       
+      - name: Check if cluster already exists
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          # Install hcloud CLI
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          
+          ENV="${{ inputs.environment }}"
+          CONTROL_PLANE_NAME="k3s-trading-${ENV}-control"
+          NETWORK_NAME="k3s-trading-${ENV}-network"
+          
+          echo "=== Checking if cluster '$ENV' already exists ==="
+          
+          # Check for control plane server
+          EXISTING_SERVER=$(./hcloud server list -o noheader -o columns=name | grep "^${CONTROL_PLANE_NAME}$" || true)
+          
+          # Check for network
+          EXISTING_NETWORK=$(./hcloud network list -o noheader -o columns=name | grep "^${NETWORK_NAME}$" || true)
+          
+          if [ -n "$EXISTING_SERVER" ] || [ -n "$EXISTING_NETWORK" ]; then
+            echo "❌ ERROR: Cluster '$ENV' is already running!"
+            echo ""
+            echo "Found existing resources:"
+            [ -n "$EXISTING_SERVER" ] && echo "  - Server: $CONTROL_PLANE_NAME"
+            [ -n "$EXISTING_NETWORK" ] && echo "  - Network: $NETWORK_NAME"
+            echo ""
+            echo "Please destroy the existing cluster first using the 'hcloud-maintenance' workflow:"
+            echo "  Actions → hcloud-maintenance → Run workflow → destroy-cluster"
+            echo ""
+            exit 1
+          fi
+          
+          echo "✅ No existing cluster found for '$ENV'. Proceeding with deployment..."
+      
       - name: Create SSH key files
         run: |
           mkdir -p ~/.ssh

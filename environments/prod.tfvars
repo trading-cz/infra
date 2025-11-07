@@ -5,10 +5,10 @@ location     = "nbg1"
 datacenter   = "nbg1-dc3" # Required for Primary IPs
 
 # Production-grade instances
-control_plane_server_type = "cx22"  #
-kafka_server_type         = "cx22"  # upgrade to cax21 ARM if needed
+control_plane_server_type = "cx23"  #
+kafka_server_type         = "cx23"  # upgrade to cax21 ARM if needed
 kafka_node_count          = 3       # KRaft quorum
-app_server_type           = "cx22"  # 2 vCPU, 4GB RAM, x86_64 - cheapest available
+app_server_type           = "cx23"  # 2 vCPU, 4GB RAM, x86_64 - cheapest available
 app_node_count            = 1       # Start with 1 worker for apps
 
 # K3s version
