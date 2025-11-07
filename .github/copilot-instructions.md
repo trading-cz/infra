@@ -12,7 +12,6 @@
 - Destroy VMs after hours → massive cost savings
 - Persistent Primary IPs (€1/month) maintain stable DNS
 - Kafka streaming pipeline: market data → trading strategies
-- **Cost**: €20/month (vs €106/month 24/7)
 
 ---
 
@@ -58,7 +57,7 @@ kafka-1/kafka-2 (CPX31): 10.0.1.21-22 (private only)
 ## Repository Structure
 
 ```
-terraform/
+root/
 ├── main.tf, variables.tf, outputs.tf  # Root module
 ├── environments/{dev,prod}.tfvars     # CPX21 vs CPX31 configs
 ├── modules/
@@ -67,15 +66,10 @@ terraform/
 │   └── k3s/        # VMs + cloud-init scripts
 └── templates/*.sh  # K3s bootstrap scripts
 
-kubernetes/
-├── base/{kafka,apps}/              # Shared configs
-├── overlays/{dev,prod}/            # Env-specific patches
-└── app-of-apps/argocd/             # ArgoCD CRs (future)
-
 .github/workflows/
 ├── deploy-cluster.yml        # Terraform → K3s → Kafka
 ├── hcloud-maintenance.yml    # list|destroy-cluster|destroy-all
-└── review-terraform.yml      # PR validation
+└── megalinter-terraform.yml  # linter for PR review
 ```
 
 ---
@@ -102,10 +96,6 @@ kubernetes/
 - `destroy-all`: Delete everything including IPs (permanent shutdown)
 - `list`: Show all resources
 
-### Deploy Apps
-**Current**: `kubectl apply -k kubernetes/overlays/{dev|prod}`  
-**Future**: Push to `main`/`production` → ArgoCD auto-syncs
-
 ### Local Validation (PowerShell)
 ```powershell
 $env:TF_VAR_ssh_public_key = Get-Content -Raw '.ssh/key.pub'
@@ -123,17 +113,6 @@ cd terraform; terraform.exe validate
 - `SSH_PRIVATE_KEY`: ED25519 private key (full with headers)
 - `SSH_PUBLIC_KEY`: ED25519 public key
 
-### Environment Configs (dev.tfvars vs prod.tfvars)
-```hcl
-# Dev: shared vCPU
-kafka_server_type = "cpx21"  # €8.21/mo × 3
-
-# Prod: dedicated vCPU
-kafka_server_type = "cpx31"  # €16.32/mo × 3
-
-k3s_version = "v1.34.1+k3s1"  # Both envs
-```
-
 ### Kafka Config (kafka-cluster.yaml)
 ```yaml
 version: 4.0.0
@@ -143,48 +122,12 @@ listeners:
   - name: external, port: 9094, type: nodeport, nodePort: 32100
 ```
 
-### Firewall (Testing - Currently Disabled on control/kafka-0)
-```
-22 (SSH), 6443 (K8s API), 80/443 (HTTP), 9092-9094 (Kafka), 30000-32767 (NodePort)
-Source: 0.0.0.0/0 (TODO: restrict to your IP)
-```
-**Note**: Firewall only affects public IPs; private network always open.
-
----
-
-## Troubleshooting
-
-**SSH Timeout**: Fixed! Terraform outputs Primary IPs (not private IPs)
-```bash
-terraform output control_plane_ip  # Should show 95.217.X.Y
-```
-
 **Primary IP Not Assigned**: Check GitHub Actions logs → "Assign Primary IP to kafka-0"
 ```bash
 hcloud server poweroff <kafka-0-id>
 hcloud primary-ip assign <ip-id> <server-id>
 hcloud server poweron <kafka-0-id>
 ```
-
-**Kafka Pods Not Scheduling**: Check node labels
-```bash
-kubectl get nodes --show-labels | grep kafka  # Should see node-role.kubernetes.io/kafka=true
-```
-
-**ArgoCD Not Syncing**: Not actively used yet (manual kubectl apply)
-
----
-
-## Cost Breakdown
-
-**Primary IPs**: €1.00/mo (2× €0.50, 24/7 billing, enables DNS stability)
-
-**VMs** (billed per hour):
-- **Dev** (2h/day × 22d = 6% uptime): €0.49 + €1.48 = €1.97/mo
-- **Prod** (10h/day × 22d = 30% uptime): €2.46 + €14.69 = €17.15/mo
-
-**Total**: €20.12/mo vs €106/mo (24/7) = **58% savings**
-
 ---
 
 ## Development Guidelines
@@ -195,46 +138,6 @@ kubectl get nodes --show-labels | grep kafka  # Should see node-role.kubernetes.
 - Update both dev.tfvars and prod.tfvars
 - Test in dev first
 
-**Kubernetes**:
-- Use Kustomize overlays for env-specific changes
-- Keep base configs minimal
-- Validate: `kubectl apply -k --dry-run=client`
-
-**GitHub Actions**:
-- Test in feature branch (review-terraform.yml validates)
-- Never hardcode secrets
-- Use `terraform fmt` before committing
-
----
-
-## Quick Commands
-
-```bash
-# Access cluster (download kubeconfig from GitHub Actions artifacts)
-export KUBECONFIG=./kubeconfig-dev.yaml
-kubectl get nodes
-
-# List resources
-hcloud server list -l environment=dev
-hcloud primary-ip list -l environment=dev
-
-# Create Kafka topic
-kubectl apply -f - <<EOF
-apiVersion: kafka.strimzi.io/v1beta2
-kind: KafkaTopic
-metadata:
-  name: stock-stream
-  namespace: kafka
-  labels: {strimzi.io/cluster: trading-cluster}
-spec: {partitions: 6, replicas: 3}
-EOF
-
 # Test Kafka
-# Internal: trading-cluster-kafka-bootstrap.kafka:9092
-# External: <kafka-0-ip>:32100
-```
-
-**Resources**:
-- Hetzner: https://console.hetzner.cloud/
-- GitHub Actions: https://github.com/trading-cz/infra/actions
-- Docs: K3s, Strimzi, Hetzner Primary IPs
+- Internal: trading-cluster-kafka-bootstrap.kafka:9092
+- External: <kafka-0-ip>:32100
