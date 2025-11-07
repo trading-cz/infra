@@ -6,7 +6,6 @@ module "k3s" {
   source                      = "./modules/k3s"
   environment                 = var.environment
   cluster_name                = var.cluster_name
-  k3s_token                   = var.k3s_token
   control_plane_name          = "${var.cluster_name}-${var.environment}-control"
   control_plane_server_type   = var.control_plane_server_type
   control_plane_ip            = "10.0.1.10"
