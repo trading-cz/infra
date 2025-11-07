@@ -183,7 +183,7 @@ jobs:
           # Assign Primary IP
           echo ""
           echo "Assigning Primary IP to kafka-0..."
-          if ! ./hcloud primary-ip assign ${PRIMARY_IP_ID} ${KAFKA_NODE_0_ID}; then
+          if ! ./hcloud primary-ip assign --server ${KAFKA_NODE_0_ID} ${PRIMARY_IP_ID}; then
             echo "❌ Failed to assign Primary IP to kafka-0"
             exit 1
           fi
