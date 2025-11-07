@@ -25,10 +25,10 @@ module "k3s" {
       target_revision = var.environment == "dev" ? "main" : "production"
     })
   })
-  network_id  = module.network.network_id
-  firewall_id = module.network.firewall_id
-  ssh_key_id  = module.compute.ssh_key_id
-  location    = var.location
+  network_id        = module.network.network_id
+  firewall_id       = module.network.firewall_id
+  ssh_key_id        = module.compute.ssh_key_id
+  location          = var.location
   kafka_node_count  = var.kafka_node_count
   kafka_server_type = var.kafka_server_type
   app_node_count    = var.app_node_count
