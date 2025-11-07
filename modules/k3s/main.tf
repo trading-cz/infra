@@ -58,9 +58,8 @@ resource "hcloud_server" "kafka_nodes" {
   image       = "ubuntu-24.04"
   location    = var.location
   ssh_keys    = [var.ssh_key_id]
-  # kafka-0 has no firewall for external Kafka access (protected by NodePort)
-  # kafka-1 and kafka-2 have firewall for security (no public IP anyway)
-  firewall_ids = count.index == 0 ? [] : [var.firewall_id]
+  # All kafka nodes get firewall (kafka-0 has public IP for external Kafka access)
+  firewall_ids = [var.firewall_id]
 
   labels = var.labels
 
@@ -76,7 +75,14 @@ resource "hcloud_server" "kafka_nodes" {
     ip         = "10.0.1.${20 + count.index}"
   }
 
-  user_data = var.worker_user_data
+  # Generate user_data with correct node IP for each kafka node
+  user_data = templatefile("${path.root}/templates/worker-init.sh", {
+    k3s_version = var.k3s_version
+    k3s_token   = var.k3s_token
+    k3s_url     = "https://${var.control_plane_ip}:6443"
+    node_ip     = "10.0.1.${20 + count.index}"
+    node_label  = "node-role.kubernetes.io/kafka=true"
+  })
 }
 
 resource "hcloud_server" "app_nodes" {

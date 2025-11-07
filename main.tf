@@ -6,40 +6,29 @@ module "k3s" {
   source                      = "./modules/k3s"
   environment                 = var.environment
   cluster_name                = var.cluster_name
+  k3s_version                 = var.k3s_version
+  k3s_token                   = var.k3s_token
   control_plane_name          = "${var.cluster_name}-${var.environment}-control"
   control_plane_server_type   = var.control_plane_server_type
   control_plane_ip            = "10.0.1.10"
   control_plane_primary_ip_id = module.network.control_plane_primary_ip_id # Attach Primary IP #1
   control_plane_user_data = templatefile("${path.module}/templates/control-plane-init.sh", {
-    k3s_version = var.k3s_version
-    k3s_token   = var.k3s_token
-    node_ip     = "10.0.1.10"
-    environment = var.environment
-    public_ip   = module.network.control_plane_primary_ip_address # Pass public IP for TLS cert
+    k3s_version  = var.k3s_version
+    k3s_token    = var.k3s_token
+    node_ip      = "10.0.1.10"
+    environment  = var.environment
+    cluster_name = var.cluster_name
+    public_ip    = module.network.control_plane_primary_ip_address # Pass public IP for TLS cert
     argocd_parent_app = templatefile("${path.module}/argocd/parent-app-bootstrap.yaml.tpl", {
       environment     = var.environment
       config_repo_url = var.config_repo_url
       target_revision = var.environment == "dev" ? "main" : "production"
     })
   })
-  worker_user_data = templatefile("${path.module}/templates/worker-init.sh", {
-    k3s_version = var.k3s_version
-    k3s_token   = var.k3s_token
-    k3s_url     = "https://10.0.1.10:6443"
-    node_ip     = "10.0.1.20"
-    node_label  = "node-role.kubernetes.io/kafka=true"
-  })
-  app_user_data = templatefile("${path.module}/templates/worker-init.sh", {
-    k3s_version = var.k3s_version
-    k3s_token   = var.k3s_token
-    k3s_url     = "https://10.0.1.10:6443"
-    node_ip     = "10.0.1.30"
-    node_label  = "node-role.kubernetes.io/app=true"
-  })
-  network_id        = module.network.network_id
-  firewall_id       = module.network.firewall_id
-  ssh_key_id        = module.compute.ssh_key_id
-  location          = var.location
+  network_id  = module.network.network_id
+  firewall_id = module.network.firewall_id
+  ssh_key_id  = module.compute.ssh_key_id
+  location    = var.location
   kafka_node_count  = var.kafka_node_count
   kafka_server_type = var.kafka_server_type
   app_node_count    = var.app_node_count

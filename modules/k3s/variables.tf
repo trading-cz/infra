@@ -23,8 +23,13 @@ variable "control_plane_user_data" {
   type        = string
 }
 
-variable "worker_user_data" {
-  description = "User data for worker initialization"
+variable "k3s_version" {
+  description = "K3s version to install"
+  type        = string
+}
+
+variable "k3s_token" {
+  description = "K3s cluster token for node authentication"
   type        = string
 }
 

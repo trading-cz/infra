@@ -32,12 +32,33 @@ done
 echo "=== K3s Control Plane Ready ==="
 kubectl get nodes
 
-# Taint control plane to prevent regular workloads from scheduling here
-# Only ArgoCD and system components should run on control plane
-echo "Adding taint to control plane to prevent regular workloads..."
-kubectl taint nodes --all node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite || true
+# Wait for worker nodes to join before installing workloads
+echo ""
+echo "=== Waiting for worker nodes to join cluster ==="
+echo "Expected: 3 kafka workers + 1 control plane = 4 nodes total"
+TIMEOUT=300
+ELAPSED=0
+until [ $(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $ELAPSED -ge $${TIMEOUT} ]; do
+  CURRENT=$(kubectl get nodes --no-headers | wc -l)
+  echo "[$ELAPSED/$${TIMEOUT} s] Nodes joined: $CURRENT/4"
+  sleep 10
+  ELAPSED=$((ELAPSED + 10))
+done
 
-echo "✅ Control plane configured with NoSchedule taint"
+FINAL_COUNT=$(kubectl get nodes --no-headers | wc -l)
+if [ $FINAL_COUNT -ge 4 ]; then
+  echo "✅ All worker nodes joined! ($FINAL_COUNT nodes total)"
+  kubectl get nodes
+else
+  echo "⚠️  Warning: Only $FINAL_COUNT nodes joined after $${TIMEOUT}s"
+  kubectl get nodes
+fi
+
+# Taint control plane to prevent regular workloads from scheduling here
+echo ""
+echo "Adding taint to control plane..."
+kubectl taint nodes ${cluster_name}-${environment}-control node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite || true
+echo "✅ Control plane tainted - regular workloads will only run on worker nodes"
 
 # =============================================================================
 # INSTALL STRIMZI OPERATOR
