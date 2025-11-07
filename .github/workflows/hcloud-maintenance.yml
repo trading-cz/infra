@@ -14,7 +14,7 @@ on:
         required: true
         default: "list"
         type: choice
-        options: [list, destroy]
+        options: [list, destroy-cluster, destroy-all]
 
 jobs:
   hcloud:
@@ -34,30 +34,193 @@ jobs:
           set -euo pipefail
           ENV="${{ inputs.env }}"
 
+          echo "========================================="
+          echo "  Hetzner Cloud Resources: ${ENV}"
+          echo "========================================="
+          echo
+          
+          echo "== Primary IPs (Persistent) =="
+          hcloud primary-ip list -l environment="$ENV" -o columns=id,name,ip,type,assignee_id,labels || echo "No Primary IPs found"
+          
+          echo
           echo "== Servers =="
-          # Use flat column key 'ipv4' (not public_net.ipv4)
           hcloud server list -l environment="$ENV" -o columns=id,name,ipv4,labels
 
           echo
           echo "== Volumes =="
-          hcloud volume list -l environment="$ENV" -o columns=id,name,size,labels || true
+          hcloud volume list -l environment="$ENV" -o columns=id,name,size,labels || echo "No volumes found"
 
           echo
           echo "== Load Balancers =="
-          hcloud load-balancer list -l environment="$ENV" -o columns=id,name,labels || true
+          hcloud load-balancer list -l environment="$ENV" -o columns=id,name,labels || echo "No load balancers found"
 
           echo
           echo "== Floating IPs =="
-          hcloud floating-ip list -l environment="$ENV" -o columns=id,description,ip,labels || true
+          hcloud floating-ip list -l environment="$ENV" -o columns=id,description,ip,labels || echo "No Floating IPs found"
 
-      # ---------- DESTROY ----------
-      - name: Destroy ALL resources by env
-        if: ${{ inputs.action == 'destroy' }}
+          echo
+          echo "== SSH Keys =="
+          hcloud ssh-key list -l environment="$ENV" -o columns=id,name,fingerprint,labels || echo "No SSH keys found"
+
+          echo
+          echo "== Networks =="
+          hcloud network list -l environment="$ENV" -o columns=id,name,ip_range,labels || echo "No networks found"
+
+          echo
+          echo "== Firewalls =="
+          hcloud firewall list -l environment="$ENV" -o columns=id,name,labels || echo "No firewalls found"
+          
+          echo
+          echo "========================================="
+          echo "💡 Tip: Primary IPs persist after VM destruction"
+          echo "   Cost: €0.50/month each (€1.00 total)"
+          echo "========================================="
+      # ---------- DESTROY CLUSTER (keep Primary IPs) ----------
+      - name: Destroy cluster (keep Primary IPs for reuse)
+        if: ${{ inputs.action == 'destroy-cluster' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
           ENV="${{ inputs.env }}"
+
+          echo "========================================="
+          echo "  Destroying Cluster (Keeping Primary IPs)"
+          echo "========================================="
+          echo
+          echo "⚠️  This will DELETE:"
+          echo "   - All VMs (servers)"
+          echo "   - Networks & Subnets"
+          echo "   - Firewalls"
+          echo "   - SSH Keys"
+          echo "   - Volumes"
+          echo "   - Load Balancers"
+          echo
+          echo "✅ This will KEEP:"
+          echo "   - Primary IPs (€1.00/month billing continues)"
+          echo
+          echo "Use this for daily cluster cleanup while preserving IPs"
+          echo
+          
+          # Delete servers first
+          mapfile -t SRVS < <(
+            hcloud server list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d'
+          )
+          if [ ${#SRVS[@]} -gt 0 ]; then
+            echo "Deleting ${#SRVS[@]} servers..."
+            hcloud server delete "${SRVS[@]}"
+            echo "✅ Servers deleted"
+          else
+            echo "No servers found"
+          fi
+
+          # Delete volumes
+          mapfile -t VOLS < <(
+            hcloud volume list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d' || true
+          )
+          if [ ${#VOLS[@]} -gt 0 ]; then
+            echo "Deleting ${#VOLS[@]} volumes..."
+            hcloud volume delete "${VOLS[@]}"
+            echo "✅ Volumes deleted"
+          else
+            echo "No volumes found"
+          fi
+
+          # Delete load balancers
+          mapfile -t LBS < <(
+            hcloud load-balancer list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d' || true
+          )
+          if [ ${#LBS[@]} -gt 0 ]; then
+            echo "Deleting ${#LBS[@]} load balancers..."
+            hcloud load-balancer delete "${LBS[@]}"
+            echo "✅ Load balancers deleted"
+          else
+            echo "No load balancers found"
+          fi
+
+          # Delete SSH keys
+          mapfile -t SSHKEYS < <(
+            hcloud ssh-key list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#SSHKEYS[@]} -gt 0 ]; then
+            echo "Deleting ${#SSHKEYS[@]} SSH keys..."
+            hcloud ssh-key delete "${SSHKEYS[@]}"
+            echo "✅ SSH keys deleted"
+          else
+            echo "No SSH keys found"
+          fi
+
+          # Delete networks
+          mapfile -t NETS < <(
+            hcloud network list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#NETS[@]} -gt 0 ]; then
+            echo "Deleting ${#NETS[@]} networks..."
+            hcloud network delete "${NETS[@]}"
+            echo "✅ Networks deleted"
+          else
+            echo "No networks found"
+          fi
+
+          # Delete firewalls
+          mapfile -t FWS < <(
+            hcloud firewall list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#FWS[@]} -gt 0 ]; then
+            echo "Deleting ${#FWS[@]} firewalls..."
+            hcloud firewall delete "${FWS[@]}"
+            echo "✅ Firewalls deleted"
+          else
+            echo "No firewalls found"
+          fi
+          
+          echo
+          echo "========================================="
+          echo "✅ Cluster Cleanup Complete!"
+          echo "========================================="
+          echo "Destroyed: VMs, Networks, Firewalls, SSH Keys, Volumes, Load Balancers"
+          echo "Preserved: Primary IPs (still billing €1.00/month)"
+          echo "Next deployment will reuse the same IPs"
+          echo
+          
+          # List remaining Primary IPs
+          echo "Remaining Primary IPs:"
+          hcloud primary-ip list -l environment="$ENV" -o columns=id,name,ip,assignee_id || echo "No Primary IPs found"
+      
+      # ---------- DESTROY ALL (including Primary IPs) ----------
+      - name: Destroy ALL resources (including Primary IPs)
+        if: ${{ inputs.action == 'destroy-all' }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV="${{ inputs.env }}"
+
+          echo "========================================="
+          echo "  ⚠️  DESTROYING ALL RESOURCES  ⚠️"
+          echo "========================================="
+          echo
+          echo "⚠️  WARNING: This will DELETE EVERYTHING:"
+          echo "   - All VMs (servers)"
+          echo "   - Networks & Subnets"
+          echo "   - Firewalls"
+          echo "   - SSH Keys"
+          echo "   - Volumes"
+          echo "   - Load Balancers"
+          echo "   - Primary IPs (⚠️ CANNOT BE RECOVERED)"
+          echo
+          echo "⚠️  Primary IPs cannot be recovered once deleted!"
+          echo "   Next deployment will get NEW random IPs"
+          echo "   DNS will need to be updated"
+          echo
+          echo "Proceeding in 5 seconds..."
+          sleep 5
+
+          echo "Proceeding in 5 seconds..."
+          sleep 5
 
           # ------------------------
           # 1) Delete servers first
@@ -114,3 +277,65 @@ jobs:
           else
             echo "No floating IPs found."
           fi
+          
+          # ------------------------
+          # 5) Delete Primary IPs ⚠️
+          # ------------------------
+          mapfile -t PIPS < <(
+            hcloud primary-ip list -l environment="$ENV" -o noheader -o columns=id \
+            | sed '/^$/d' || true
+          )
+          if [ ${#PIPS[@]} -gt 0 ]; then
+            echo "⚠️  Deleting ${#PIPS[@]} Primary IPs..."
+            hcloud primary-ip delete "${PIPS[@]}"
+            echo "✅ Primary IPs deleted"
+          else
+            echo "No Primary IPs found."
+          fi
+
+          # ------------------------
+          # 6) Delete SSH keys
+          # ------------------------
+          mapfile -t SSHKEYS < <(
+            hcloud ssh-key list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#SSHKEYS[@]} -gt 0 ]; then
+            echo "Deleting ${#SSHKEYS[@]} SSH keys..."
+            hcloud ssh-key delete "${SSHKEYS[@]}"
+          else
+            echo "No SSH keys found."
+          fi
+
+          # ------------------------
+          # 7) Delete networks
+          # ------------------------
+          mapfile -t NETS < <(
+            hcloud network list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#NETS[@]} -gt 0 ]; then
+            echo "Deleting ${#NETS[@]} networks..."
+            hcloud network delete "${NETS[@]}"
+          else
+            echo "No networks found."
+          fi
+
+          # ------------------------
+          # 8) Delete firewalls
+          # ------------------------
+          mapfile -t FWS < <(
+            hcloud firewall list -l environment="$ENV" -o noheader -o columns=id | sed '/^$/d' || true
+          )
+          if [ ${#FWS[@]} -gt 0 ]; then
+            echo "Deleting ${#FWS[@]} firewalls..."
+            hcloud firewall delete "${FWS[@]}"
+          else
+            echo "No firewalls found."
+          fi
+          
+          echo
+          echo "========================================="
+          echo "✅ Complete Destruction Finished!"
+          echo "========================================="
+          echo "Destroyed: Everything (VMs, Networks, Firewalls, SSH Keys, Volumes, Load Balancers, Primary IPs)"
+          echo "Next deployment will create new Primary IPs with random IPs"
+          echo "⚠️  Remember to update DNS with new IPs after next deployment"

@@ -1,1 +1,4 @@
 .idea
+.ssh
+/terraform/.terraform/
+/terraform/.terraform.lock.hcl

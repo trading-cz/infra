@@ -22,7 +22,7 @@ curl -sfL https://get.k3s.io | K3S_URL=https://myserver:6443 K3S_TOKEN=mynodetok
 
 Setting the K3S_URL parameter causes the installer to configure K3s as an agent, instead of a server. The K3s agent will register with the K3s server listening at the supplied URL. The value to use for K3S_TOKEN is stored at /var/lib/rancher/k3s/server/node-token on your server node.
 
-note
+
 Each machine must have a unique hostname. If your machines do not have unique hostnames, pass the K3S_NODE_NAME environment variable and provide a value with a valid and unique hostname for each node.
 
 If you are interested in having more server nodes, see the High Availability Embedded etcd and High Availability External DB pages for more information.
@@ -44,6 +44,21 @@ Managing Server Roles details how to set up K3s with dedicated control-plane or 
 Managing Packaged Components details how to disable packaged components, or install your own using auto-deploying manifests.
 
 Uninstalling K3s details how to remove K3s from a host.
+
+Embedded Component Versions : for v1.34.1+k3s1 Latest
+Kubernetes	v1.34.1
+Kine	v0.14.0
+SQLite	3.50.4
+Etcd	v3.6.4-k3s3
+Containerd	v2.1.4-k3s2
+Runc	v1.3.1
+Flannel	v0.27.0
+Metrics-server	v0.8.0
+Traefik	v3.3.6
+CoreDNS	v1.12.3
+Helm-controller	v0.16.13
+Local-path-provisioner	v0.0.32
+
 
 ### Requirements
 K3s is very lightweight, but has some minimum requirements as outlined below.
@@ -207,7 +222,7 @@ curl -sfL https://get.k3s.io | K3S_URL=https://k3s.example.com K3S_TOKEN=mypassw
 
 For details on all environment variables, see Environment Variables.
 
-Note
+
 If you set configuration when running the install script, but do not set it again when re-running the install script, the original values will be lost.
 
 The contents of the configuration file are not managed by the install script. If you want your configuration to be independent from the install script, you should use a configuration file instead of passing environment variables or arguments to the install script.
@@ -348,7 +363,7 @@ Upon startup, K3s will check to see if /etc/rancher/k3s/registries.yaml exists. 
 
 If you want to use a private registry as a mirror for a public registry such as docker.io, then you will need to configure registries.yaml on each node that you want to use the mirror.
 If your private registry requires authentication, uses custom TLS certificates, or does not use TLS, you will need to configure registries.yaml on each node that will pull images from your registry.
-Note that server nodes are schedulable by default. If you have not tainted the server nodes and will be running workloads on them, please ensure you also create the registries.yaml file on each server as well.
+ that server nodes are schedulable by default. If you have not tainted the server nodes and will be running workloads on them, please ensure you also create the registries.yaml file on each server as well.
 
 Default Endpoint Fallback
 Containerd has an implicit "default endpoint" for all registries. The default endpoint is always tried as a last resort, even if there are other endpoints listed for that registry in registries.yaml. Rewrites are not applied to pulls against the default endpoint. For example, when pulling registry.example.com:5000/rancher/mirrored-pause:3.6, containerd will use a default endpoint of https://registry.example.com:5000/v2.
@@ -434,7 +449,7 @@ endpoint:
 rewrite:
 "^rancher/(.*)": "mirrorproject/rancher-images/$1"
 
-Note that when using mirrors and rewrites, images will still be stored under the original name. For example, crictl image ls will show docker.io/rancher/mirrored-pause:3.6 as available on the node, even if the image was pulled from a mirror with a different name.
+ that when using mirrors and rewrites, images will still be stored under the original name. For example, crictl image ls will show docker.io/rancher/mirrored-pause:3.6 as available on the node, even if the image was pulled from a mirror with a different name.
 
 Configs
 The configs section defines the TLS and credential configuration for each mirror. For each mirror you can define auth and/or tls.
@@ -458,7 +473,7 @@ Wildcard Support
 Version Gate
 Wildcard support is available as of the March 2024 releases: v1.26.15+k3s1, v1.27.12+k3s1, v1.28.8+k3s1, v1.29.3+k3s1
 
-The "*" wildcard entry can be used in the mirrors and configs sections to provide default configuration for all registries. The default configuration will only be used if there is no specific entry for that registry. Note that the asterisk MUST be quoted.
+The "*" wildcard entry can be used in the mirrors and configs sections to provide default configuration for all registries. The default configuration will only be used if there is no specific entry for that registry.  that the asterisk MUST be quoted.
 
 In the following example, a local registry mirror will be used for all registries. TLS verification will be disabled for all registries, except docker.io.
 
@@ -513,7 +528,7 @@ In order for the registry changes to take effect, you need to restart K3s on eac
 Troubleshooting Image Pulls
 When Kubernetes experiences problems pulling an image, the error displayed by the kubelet may only reflect the terminal error returned by the pull attempt made against the default endpoint, making it appear that the configured endpoints are not being used.
 
-Check the containerd log on the node at /var/lib/rancher/k3s/agent/containerd/containerd.log for detailed information on the root cause of the failure. Note that you must look at the logs on the node where the pod was scheduled. You can check which node your pod was scheduled to by issuing kubectl get pod -o wide -n NAMESPACE POD and checking the the NODE column.
+Check the containerd log on the node at /var/lib/rancher/k3s/agent/containerd/containerd.log for detailed information on the root cause of the failure.  that you must look at the logs on the node where the pod was scheduled. You can check which node your pod was scheduled to by issuing kubectl get pod -o wide -n NAMESPACE POD and checking the the NODE column.
 
 Adding Images to the Private Registry
 Mirroring images to a private registry requires a host with Docker or other 3rd party tooling that is capable of pulling and pushing images.
@@ -574,7 +589,7 @@ To add additional agents, do the following on each agent node:
 
 INSTALL_K3S_SKIP_DOWNLOAD=true K3S_URL=https://<SERVER_IP>:6443 K3S_TOKEN=<YOUR_TOKEN> ./install.sh
 
-note
+
 K3s's --resolv-conf flag is passed through to the kubelet, which may help with configuring pod DNS resolution in air-gap networks where the host does not have upstream nameservers configured.
 
 3. Upgrading
@@ -601,7 +616,7 @@ curl -fL https://get.k3s.io | sh -s - server --cluster-init --disable-apiserver 
 This first node will start etcd, and wait for additional etcd and/or control-plane nodes to join. The cluster will not be usable until you join an additional server with the control-plane components enabled.
 
 Dedicated control-plane Nodes
-note
+
 A dedicated control-plane node cannot be the first server in the cluster; there must be an existing node with the etcd role before joining dedicated control-plane nodes.
 
 To create a server with only the control-plane role, start k3s with etcd disabled:
@@ -659,7 +674,7 @@ The AddOns for packaged components listed above, in addition to AddOns for any a
 For example, to disable traefik from being installed on a new cluster, or to uninstall it and remove the manifest from an existing cluster, you can start K3s with --disable=traefik. Multiple items can be disabled by separating their names with commas, or by repeating the flag.
 
 Using .skip files
-For any file under /var/lib/rancher/k3s/server/manifests, you can create a .skip file which will cause K3s to ignore the corresponding manifest. The contents of the .skip file do not matter, only its existence is checked. Note that creating a .skip file after an AddOn has already been created will not remove or otherwise modify it or the resources it created; the file is simply treated as if it did not exist.
+For any file under /var/lib/rancher/k3s/server/manifests, you can create a .skip file which will cause K3s to ignore the corresponding manifest. The contents of the .skip file do not matter, only its existence is checked.  that creating a .skip file after an AddOn has already been created will not remove or otherwise modify it or the resources it created; the file is simply treated as if it did not exist.
 
 For example, creating an empty traefik.yaml.skip file in the manifests directory before K3s is started the first time, will cause K3s to skip deploying traefik.yaml:
 
@@ -767,7 +782,7 @@ An HA K3s cluster with embedded etcd is composed of:
 Three or more server nodes that will serve the Kubernetes API and run other control plane services, as well as host the embedded etcd datastore.
 Optional: Zero or more agent nodes that are designated to run your apps and services
 Optional: A fixed registration address for agent nodes to register with the cluster
-note
+
 To rapidly deploy large HA clusters, see Related Projects
 
 To get started, first launch a server node with the cluster-init flag to enable clustering and a token that will be used as a shared secret to join additional servers to the cluster.
@@ -843,7 +858,7 @@ To run the killall script from a server node, run:
 ## Manual Upgrades
 You can upgrade K3s by using the installation script, or by manually installing the binary of the desired version.
 
-note
+
 When upgrading, upgrade server nodes first one at a time, then any agent nodes.
 
 Release Channels
@@ -861,7 +876,7 @@ When attempting to upgrade to a new version of K3s, the Kubernetes version skew 
 Upgrade K3s Using the Installation Script
 To upgrade K3s from an older version you can re-run the installation script using the same configuration options you originally used when running the install script.
 
-Note
+
 The INSTALL_K3S_EXEC variable, K3S_ variables, and trailing shell arguments are all used by the install script to generate the systemd unit and environment file. If you set configuration when originally running the install script, but do not set it again when re-running the install script, the original values will be lost.
 
 The contents of the configuration file are not managed by the install script. If you want your configuration to be independent from the install script, you should use a configuration file instead of passing environment variables or arguments to the install script.
@@ -871,7 +886,7 @@ Running the install script will:
 Download the new k3s binary
 Update the systemd unit or openrc init script to reflect the args passed to the install script
 Restart the k3s service
-note
+
 Containers for Pods continue running even when K3s is stopped. The install script does not drain or cordon the node before restarting k3s. If your workload is sensitive to brief API server outages, you should manually drain and cordon the node using kubectl before re-running the install script to upgrade k3s or modify the configuration, and uncordon it afterwards.
 
 For example, to upgrade to the current stable release:
@@ -895,7 +910,7 @@ To upgrade K3s manually, you can download the desired version of the K3s binary 
 Download the desired version of the K3s binary from releases
 Copy the downloaded binary to /usr/local/bin/k3s (or your desired location)
 Restart the k3s or k3s-agent service or restart the k3s process (binary)
-note
+
 Containers for Pods continue running even when K3s is stopped. It is generally safe to restart K3s without draining pods and cordoning the node. If your workload is sensitive to brief API server outages, you should manually drain and cordon the node using kubectl before restarting K3s, and uncordon it afterwards.
 
 ## Volumes and Storage
@@ -1126,7 +1141,7 @@ The egress selector mode may be configured on servers via the --egress-selector-
 disabled: The apiserver does not use agent tunnels to communicate with kubelets or cluster endpoints. This mode requires that servers run the kubelet, CNI, and kube-proxy, and have direct connectivity to agents, or the apiserver will not be able to access service endpoints or perform kubectl exec and kubectl logs.
 agent (default): The apiserver uses agent tunnels to communicate with kubelets. This mode requires that the servers also run the kubelet, CNI, and kube-proxy, or the apiserver will not be able to access service endpoints.
 pod: The apiserver uses agent tunnels to communicate with kubelets and service endpoints, routing endpoint connections to the correct agent by watching Nodes and Endpoints.
-NOTE: This mode will not work when using a CNI that uses its own IPAM and does not respect the node's PodCIDR allocation. cluster or agent mode should be used with these CNIs instead.
+: This mode will not work when using a CNI that uses its own IPAM and does not respect the node's PodCIDR allocation. cluster or agent mode should be used with these CNIs instead.
 cluster: The apiserver uses agent tunnels to communicate with kubelets and service endpoints, routing endpoint connections to the correct agent by watching Pods and Endpoints. This mode has the highest portability across different cluster configurations, at the cost of increased overhead.
 Dual-stack (IPv4 + IPv6) Networking
 Version Gate
@@ -1146,7 +1161,7 @@ To enable dual-stack in K3s, you must provide valid dual-stack cluster-cidr and 
 
 --cluster-cidr=10.42.0.0/16,2001:db8:42::/56 --service-cidr=10.43.0.0/16,2001:db8:43::/112
 
-Note that you may configure any valid cluster-cidr and service-cidr values, but the above masks are recommended. If you change the cluster-cidr mask, you should also change the node-cidr-mask-size-ipv4 and node-cidr-mask-size-ipv6 values to match the planned pods per node and total node count. The largest supported service-cidr mask is /12 for IPv4, and /112 for IPv6. Remember to allow ipv6 traffic if you are deploying in a public cloud.
+ that you may configure any valid cluster-cidr and service-cidr values, but the above masks are recommended. If you change the cluster-cidr mask, you should also change the node-cidr-mask-size-ipv4 and node-cidr-mask-size-ipv6 values to match the planned pods per node and total node count. The largest supported service-cidr mask is /12 for IPv4, and /112 for IPv6. Remember to allow ipv6 traffic if you are deploying in a public cloud.
 
 When using IPv6 addresses that are not publicly routed, for example in the ULA range, you might want to add the --flannel-ipv6-masq option to enable IPv6 NAT, as per default pods use their pod IPv6 address for outgoing traffic. If, however, publicly routed IPv6 addresses are used you need to ensure that those addresses are routed towards your cluster. Otherwise, pods will not be able to receive responses for packets originating from their IPv6 address. While it is outside the scope of K3s to automatically communicate which addresses are used on which node to outside routing infrastructure, cluster members will forward pod traffic correctly so you can point your routes to any node belonging to the cluster.
 
@@ -1191,7 +1206,7 @@ and on agents:
 
 --node-external-ip=<AGENT_EXTERNAL_IP>
 
-where SERVER_EXTERNAL_IP is the IP through which we can reach the server node and AGENT_EXTERNAL_IP is the IP through which we can reach the agent node. Note that the K3S_URL config parameter in the agent should use the SERVER_EXTERNAL_IP to be able to connect to it. Remember to check the Networking Requirements and allow access to the listed ports on both internal and external addresses.
+where SERVER_EXTERNAL_IP is the IP through which we can reach the server node and AGENT_EXTERNAL_IP is the IP through which we can reach the agent node.  that the K3S_URL config parameter in the agent should use the SERVER_EXTERNAL_IP to be able to connect to it. Remember to check the Networking Requirements and allow access to the listed ports on both internal and external addresses.
 
 Both SERVER_EXTERNAL_IP and AGENT_EXTERNAL_IP must have connectivity between them and are normally public IPs.
 
@@ -1275,7 +1290,7 @@ There are two areas of host-level requirements: kernel parameters and etcd proce
 Ensure protect-kernel-defaults is set
 This is a kubelet flag that will cause the kubelet to exit if the required kernel parameters are unset or are set to values that are different from the kubelet's defaults.
 
-Note: protect-kernel-defaults is exposed as a top-level flag for K3s.
+: protect-kernel-defaults is exposed as a top-level flag for K3s.
 
 Set kernel parameters
 Create a file called /etc/sysctl.d/90-kubelet.conf and add the snippet below. Then run sysctl -p /etc/sysctl.d/90-kubelet.conf.
@@ -1344,7 +1359,7 @@ plugins:
   runtimeClasses: []
   namespaces: [kube-system, cis-operator-system]
 
-Note: The Kubernetes critical additions such as CNI, DNS, and Ingress are run as pods in the kube-system namespace. Therefore, this namespace will have a policy that is less restrictive so that these components can run properly.
+: The Kubernetes critical additions such as CNI, DNS, and Ingress are run as pods in the kube-system namespace. Therefore, this namespace will have a policy that is less restrictive so that these components can run properly.
 
 NetworkPolicies
 CIS requires that all namespaces have a network policy applied that reasonably limits traffic into namespaces and pods.
@@ -1494,9 +1509,4 @@ All the 5.X Controls are related to Kubernetes policy configuration. These contr
 Refer to CIS 1.8 Section 5 for more information on how to create and apply these policies.
 
 Control 5.1.5
-note
 Remediation to achieve passing score is only needed for cis-1.9
-
-Details
-Conclusion
-If you have followed this guide, your K3s cluster will be configured to comply with the CIS Kubernetes Benchmark. You can review the CIS 1.8 Self-Assessment Guide to understand the expectations of each of the benchmark's checks and how you can do the same on your cluster.
