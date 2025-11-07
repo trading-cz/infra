@@ -1,4 +1,6 @@
 .idea
 .ssh
-/terraform/.terraform/
-/terraform/.terraform.lock.hcl
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup

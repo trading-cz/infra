@@ -3,9 +3,11 @@ name: Terraform Review Quality Gates
 on:
   pull_request:
     paths:
-      - 'terraform/**'
+      - '*.tf'
+      - 'modules/**'
+      - 'environments/**'
+      - 'templates/**'
       - '.github/workflows/deploy-cluster.yml'
-      - 'kubernetes/**'
 
 jobs:
   lint:
@@ -22,26 +24,20 @@ jobs:
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
-        working-directory: ./terraform
 
       - name: Terraform Validate
         run: terraform validate
-        working-directory: ./terraform
 
       - name: Terraform Validate (dev)
         run: terraform validate -var="environment=dev"
-        working-directory: ./terraform
 
       - name: Terraform Validate (prod)
         run: terraform validate -var="environment=prod"
-        working-directory: ./terraform
 
       - name: Install tflint
         run: |
           curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
           tflint --init
-        working-directory: ./terraform
 
       - name: Run tflint
         run: tflint --recursive
-        working-directory: ./terraform
