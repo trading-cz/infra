@@ -21,7 +21,8 @@ module "k3s" {
   control_plane_name          = "${var.cluster_name}-${var.environment}-control"
   control_plane_server_type   = var.control_plane_server_type
   control_plane_ip            = "10.0.1.10"
-  control_plane_primary_ip_id = module.network.control_plane_primary_ip_id # Attach Primary IP #1
+  control_plane_primary_ip_id = module.network.control_plane_primary_ip_id  # Attach Primary IP #1
+  kafka_primary_ip_id         = module.network.kafka_external_primary_ip_id # Attach Primary IP #2 to kafka-0
   control_plane_user_data = templatefile("${path.module}/templates/control-plane-init.sh", {
     k3s_version  = var.k3s_version
     k3s_token    = local.k3s_token

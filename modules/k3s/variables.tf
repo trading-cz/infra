@@ -18,6 +18,11 @@ variable "control_plane_primary_ip_id" {
   type        = string
 }
 
+variable "kafka_primary_ip_id" {
+  description = "Primary IP ID to attach to kafka-0 node"
+  type        = string
+}
+
 variable "control_plane_user_data" {
   description = "User data for control plane initialization"
   type        = string

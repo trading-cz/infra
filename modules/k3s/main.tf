@@ -59,11 +59,12 @@ resource "hcloud_server" "kafka_nodes" {
   labels = var.labels
 
   public_net {
-    # Ephemeral IPv4 enabled for cloud-init (apt-get update, K3s installer download)
-    # GitHub Actions will replace kafka-0's ephemeral IP with Primary IP #2 after deployment
-    # kafka-1 and kafka-2 keep their ephemeral IPs (€0 cost if destroyed daily within 1 hour)
+    # kafka-0: Gets Primary IP #2 (persistent, €1/month)
+    # kafka-1, kafka-2: Get ephemeral IPs (€0 if destroyed < 1 hour, ~€0.005/hour otherwise)
+    # All nodes need internet to download K3s installer
     ipv4_enabled = true
-    ipv6_enabled = false # IPv6 not needed
+    ipv4         = count.index == 0 ? var.kafka_primary_ip_id : null
+    ipv6_enabled = false
   }
 
   network {

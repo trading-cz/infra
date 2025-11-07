@@ -6,12 +6,6 @@ echo "Node IP (private): ${node_ip}"
 echo "Cluster endpoint (private): ${k3s_url}"
 echo "Node label: ${node_label}"
 
-# Update system and install dependencies
-# NOTE: Kafka nodes have ephemeral public IPs during cloud-init
-# kafka-0's ephemeral IP will be replaced with Primary IP #2 by GitHub Actions after deployment
-apt-get update
-apt-get install -y curl
-
 # Wait for control plane to be ready with timeout
 echo ""
 echo "Waiting for control plane to be ready..."
@@ -61,7 +55,7 @@ done
 echo "✅ Control plane is ready!"
 echo ""
 
-# Install K3s agent
+# Install K3s agent (all kafka nodes have public IP for installer download)
 echo "Installing K3s agent..."
 curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${k3s_version}" K3S_URL="${k3s_url}" K3S_TOKEN="${k3s_token}" sh -s - agent \
   --node-ip="${node_ip}" \
@@ -71,3 +65,4 @@ echo ""
 echo "=== K3s Worker Node Ready ==="
 echo "Node joined cluster: ${node_ip}"
 echo "Next: Control plane will detect this node automatically"
+
