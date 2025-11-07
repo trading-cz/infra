@@ -62,7 +62,28 @@ module "network" {
       protocol    = "tcp"
       port        = "6443"
       source_ips  = ["0.0.0.0/0"]
-      description = "Allow Kubernetes API"
+      description = "Allow Kubernetes API (external)"
+    },
+    {
+      direction   = "in"
+      protocol    = "tcp"
+      port        = "6443"
+      source_ips  = ["10.0.1.0/24"]
+      description = "Allow Kubernetes API (internal network)"
+    },
+    {
+      direction   = "in"
+      protocol    = "tcp"
+      port        = "10250"
+      source_ips  = ["10.0.1.0/24"]
+      description = "Allow Kubelet (internal nodes)"
+    },
+    {
+      direction   = "in"
+      protocol    = "tcp"
+      port        = "2379-2380"
+      source_ips  = ["10.0.1.0/24"]
+      description = "Allow etcd (internal)"
     },
     {
       direction   = "in"

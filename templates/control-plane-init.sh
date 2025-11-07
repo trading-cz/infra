@@ -36,12 +36,12 @@ kubectl get nodes
 echo ""
 echo "=== Waiting for worker nodes to join cluster ==="
 echo "Expected: 3 kafka workers + 1 control plane = 4 nodes total"
-TIMEOUT=120  # 2 minutes should be enough - workers boot in parallel
+TIMEOUT=180  # 3 minutes - should be enough with proper firewall rules
 ELAPSED=0
-until [ $(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $ELAPSED -ge $${TIMEOUT} ]; do
+until [ $(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $ELAPSED -ge $TIMEOUT ]; do
   CURRENT=$(kubectl get nodes --no-headers | wc -l)
-  echo "[$ELAPSED/$${TIMEOUT} s] Nodes joined: $CURRENT/4"
-  sleep 5  # Check every 5 seconds instead of 10
+  echo "[$ELAPSED/$TIMEOUT s] Nodes joined: $CURRENT/4"
+  sleep 5  # Check every 5 seconds
   ELAPSED=$((ELAPSED + 5))
 done
 
@@ -50,26 +50,30 @@ if [ $FINAL_COUNT -ge 4 ]; then
   echo "✅ All worker nodes joined! ($FINAL_COUNT nodes total)"
   kubectl get nodes
 else
-  echo "❌ ERROR: Only $FINAL_COUNT nodes joined after $${TIMEOUT}s"
+  echo "❌ ERROR: Only $FINAL_COUNT nodes joined after $TIMEOUT s"
   echo ""
   kubectl get nodes
   echo ""
   echo "Expected: 4 nodes (1 control + 3 kafka workers)"
   echo "Got: $FINAL_COUNT nodes"
   echo ""
-  echo "Worker nodes failed to join the cluster!"
-  echo "This will cause all workload pods to remain Pending."
+  echo "TROUBLESHOOTING:"
+  echo "1. Check worker node cloud-init logs:"
+  echo "   - Get IPs: hcloud server list"
+  echo "   - SSH each: ssh root@<IP> 'tail -100 /var/log/cloud-init-output.log'"
   echo ""
-  echo "Check worker node cloud-init logs:"
-  echo "  ssh root@<kafka-node-ip> 'tail -100 /var/log/cloud-init-output.log'"
+  echo "2. Check K3s join errors:"
+  echo "   - ssh root@<worker-IP> 'journalctl -xe -u k3s-agent'"
   echo ""
-  echo "Common causes:"
-  echo "  - Control plane not accessible from worker nodes (network issue)"
-  echo "  - K3s token mismatch"
-  echo "  - Worker nodes still booting"
+  echo "3. Verify network:"
+  echo "   - ssh root@<worker-IP> 'ping 10.0.1.10' (test control plane)"
+  echo "   - ssh root@<worker-IP> 'curl -k https://10.0.1.10:6443/readyz' (test API)"
   echo ""
-  # Don't fail - just warn (cloud-init should not fail completely)
-  echo "⚠️  Continuing with installation but expect failures..."
+  echo "4. Check firewall rules:"
+  echo "   - hcloud firewall describe <firewall-id>"
+  echo "   - Ensure port 6443 + 10250 + 2379-2380 allowed from 10.0.1.0/24"
+  echo ""
+  exit 1
 fi
 
 # Taint control plane to prevent regular workloads from scheduling here
