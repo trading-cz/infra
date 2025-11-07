@@ -60,18 +60,62 @@ echo "Adding taint to control plane..."
 kubectl taint nodes ${cluster_name}-${environment}-control node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite || true
 echo "✅ Control plane tainted - regular workloads will only run on worker nodes"
 
+# Label kafka nodes for Kafka pod scheduling
+echo ""
+echo "=== Labeling kafka nodes for workload placement ==="
+for node in $(kubectl get nodes -o name | grep kafka); do
+  kubectl label $node node-role.kubernetes.io/worker=true --overwrite || true
+  kubectl label $node workload-type=kafka --overwrite || true
+done
+echo "✅ Kafka nodes labeled"
+kubectl get nodes --show-labels | grep -E 'NAME|kafka'
+
 # =============================================================================
 # INSTALL STRIMZI OPERATOR
 # =============================================================================
 echo ""
 echo "=== Installing Strimzi Operator ==="
 kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
-kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
 
-echo "Waiting for Strimzi Operator to be ready..."
-kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
+# Download Strimzi installation files
+echo "Downloading Strimzi manifests..."
+curl -sfL https://strimzi.io/install/latest?namespace=kafka -o /tmp/strimzi-install.yaml
 
-echo "✅ Strimzi Operator installed"
+# Apply Strimzi manifests
+echo "Applying Strimzi Operator..."
+kubectl apply -f /tmp/strimzi-install.yaml -n kafka
+
+# Patch Strimzi operator deployment to ensure it schedules on worker nodes
+echo "Configuring Strimzi operator node affinity..."
+kubectl patch deployment strimzi-cluster-operator -n kafka --type=json -p='[
+  {
+    "op": "add",
+    "path": "/spec/template/spec/affinity",
+    "value": {
+      "nodeAffinity": {
+        "preferredDuringSchedulingIgnoredDuringExecution": [{
+          "weight": 100,
+          "preference": {
+            "matchExpressions": [{
+              "key": "node-role.kubernetes.io/worker",
+              "operator": "Exists"
+            }]
+          }
+        }]
+      }
+    }
+  }
+]' || echo "Note: Affinity patch failed (may already exist)"
+
+echo "Waiting for Strimzi Operator to be ready (timeout: 5 minutes)..."
+kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || {
+  echo "⚠️ Strimzi operator not ready within timeout"
+  echo "Current pod status:"
+  kubectl get pods -n kafka
+  kubectl describe pod -l name=strimzi-cluster-operator -n kafka | tail -20
+}
+
+echo "✅ Strimzi Operator installation complete"
 kubectl get pods -n kafka
 
 # =============================================================================

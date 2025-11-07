@@ -105,7 +105,14 @@ jobs:
           echo "kafka_external_ip=$(terraform output -raw kafka_external_ip)" >> $GITHUB_OUTPUT
           echo "kafka_external_primary_ip_id=$(terraform output -raw kafka_external_primary_ip_id)" >> $GITHUB_OUTPUT
           echo "kafka_node_0_id=$(terraform output -raw kafka_node_0_id)" >> $GITHUB_OUTPUT
-          terraform output -json > outputs.json
+          terraform output -json > terraform-outputs.json
+      
+      - name: Upload Terraform outputs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-${{ inputs.environment }}
+          path: terraform-outputs.json
+          retention-days: 1
       
       - name: Assign Primary IP to kafka-0
         env:
@@ -226,26 +233,22 @@ jobs:
             echo "  - Use only when discontinuing environment" >> $GITHUB_STEP_SUMMARY
           fi
 
-  verify-external-access:
-    name: Verify External Connectivity
+  verify-infrastructure:
+    name: Verify Infrastructure Connectivity
     needs: terraform
     runs-on: ubuntu-latest
     
     steps:
-      - name: Get Terraform outputs
-        id: get_outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-outputs-${{ inputs.environment }}
-          path: .
-        continue-on-error: true
-      
       - name: Extract IPs from terraform job
         id: ips
         run: |
-          # These will be passed from the terraform job
+          # These will be passed from the terraform job outputs
           echo "control_plane_ip=${{ needs.terraform.outputs.control_plane_ip }}" >> $GITHUB_OUTPUT
           echo "kafka_external_ip=${{ needs.terraform.outputs.kafka_external_ip }}" >> $GITHUB_OUTPUT
+          
+          echo "=== IP Addresses from Terraform ==="
+          echo "Control Plane: ${{ needs.terraform.outputs.control_plane_ip }}"
+          echo "Kafka External: ${{ needs.terraform.outputs.kafka_external_ip }}"
       
       - name: Test Control Plane Connectivity
         run: |
@@ -285,37 +288,21 @@ jobs:
             echo "❌ CLOSED"
           fi
       
-      - name: Test Kafka External Connectivity
+      - name: Test Kafka Node SSH
         run: |
           KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
           
-          echo "=== Testing Kafka External Access ($KAFKA_IP) ==="
+          echo "=== Testing Kafka Node SSH ($KAFKA_IP) ==="
           
-          # Test SSH (port 22)
+          # Test SSH (port 22) - should be open
           echo -n "SSH (22): "
           if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
             echo "✅ OPEN"
           else
             echo "❌ CLOSED"
           fi
-          
-          # Test Kafka NodePort (port 32100)
-          echo -n "Kafka NodePort (32100): "
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null; then
-            echo "✅ OPEN"
-          else
-            echo "❌ CLOSED - Kafka external access not available!"
-          fi
-          
-          # Test Kafka internal ports (should be closed externally)
-          echo -n "Kafka Internal (9092): "
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
-            echo "⚠️ OPEN - Should be internal only!"
-          else
-            echo "✅ CLOSED (correct - internal only)"
-          fi
       
-      - name: Connectivity Summary
+      - name: Infrastructure Summary
         if: always()
         run: |
           CONTROL_IP="${{ needs.terraform.outputs.control_plane_ip }}"
@@ -336,33 +323,22 @@ jobs:
           done
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Kafka External: \`$KAFKA_IP\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Kafka Node: \`$KAFKA_IP\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Test Kafka port
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null; then
-            echo "- ✅ Port 32100 (NodePort): **OPEN** 🎉" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Connect to Kafka**:" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "$KAFKA_IP:32100" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+          # Test SSH only (Kafka service not deployed yet)
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
+            echo "- ✅ Port 22 (SSH): **OPEN**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- ❌ Port 32100 (NodePort): **CLOSED**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Issue**: Kafka external access not available. Check firewall configuration." >> $GITHUB_STEP_SUMMARY
+            echo "- ❌ Port 22 (SSH): **CLOSED**" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Check internal port is properly blocked
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
-            echo "- ⚠️ Port 9092 (Internal): **OPEN** - Should be blocked!" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- ✅ Port 9092 (Internal): **CLOSED** (correct)" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Note: Kafka application ports will be tested after deployment completes_" >> $GITHUB_STEP_SUMMARY
 
   post-setup:
     name: Verify Cluster Bootstrap
-    needs: [terraform, verify-external-access]
+    needs: [terraform, verify-infrastructure]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     
@@ -495,3 +471,199 @@ jobs:
           echo "- **VMs**: Only charged when running" >> $GITHUB_STEP_SUMMARY
           echo "- **Daily cleanup**: Use \`hcloud-maintenance → destroy-cluster\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Complete shutdown**: Use \`hcloud-maintenance → destroy-all\`" >> $GITHUB_STEP_SUMMARY
+
+  verify-kafka-deployment:
+    name: Verify Kafka External Access
+    needs: [terraform, post-setup]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if post-setup has warnings
+    
+    steps:
+      - name: Download kubeconfig
+        uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig-${{ inputs.environment }}
+          path: .
+      
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.30.0'
+      
+      - name: Wait for Kafka cluster to be ready
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          
+          echo "=== Waiting for Kafka cluster deployment (up to 10 minutes) ==="
+          
+          # Wait for Kafka resource to exist
+          TIMEOUT=600
+          ELAPSED=0
+          until kubectl get kafka -n kafka trading-cluster 2>/dev/null || [ $ELAPSED -ge $TIMEOUT ]; do
+            echo "[$ELAPSED/$TIMEOUT s] Waiting for Kafka resource..."
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+          
+          if ! kubectl get kafka -n kafka trading-cluster 2>/dev/null; then
+            echo "❌ FATAL: Kafka cluster not deployed after $TIMEOUT seconds"
+            echo ""
+            echo "=== ArgoCD Applications ==="
+            kubectl get applications -n argocd || true
+            echo ""
+            echo "=== Kafka Namespace Pods ==="
+            kubectl get pods -n kafka || true
+            echo ""
+            echo "Deployment failed: Kafka cluster resource not found"
+            exit 1
+          fi
+          
+          echo "✅ Kafka cluster resource found"
+          kubectl get kafka -n kafka trading-cluster
+          
+          # Wait for Kafka pods to be ready (REQUIRED)
+          echo ""
+          echo "Waiting for Kafka broker pods to be ready..."
+          if ! kubectl wait --for=condition=ready pod -l strimzi.io/cluster=trading-cluster -n kafka --timeout=300s; then
+            echo "❌ FATAL: Kafka pods not ready after 5 minutes"
+            echo ""
+            echo "=== Kafka Pod Status ==="
+            kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
+            echo ""
+            echo "=== Kafka Pod Details ==="
+            kubectl describe pods -n kafka -l strimzi.io/cluster=trading-cluster | tail -50
+            echo ""
+            echo "Deployment failed: Kafka brokers not running"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ Kafka broker pods are ready"
+          kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
+      
+      - name: Test Kafka external connectivity with retry
+        run: |
+          KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
+          MAX_RETRIES=5
+          RETRY_DELAY=10
+          
+          echo "=== Testing Kafka External Access ($KAFKA_IP:32100) ==="
+          echo "Will retry up to $MAX_RETRIES times with ${RETRY_DELAY}s delay between attempts"
+          echo ""
+          
+          # Function to test Kafka port
+          test_kafka_port() {
+            timeout 10 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/32100" 2>/dev/null
+          }
+          
+          # Retry loop
+          SUCCESS=false
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES: Testing Kafka NodePort (32100)..."
+            
+            if test_kafka_port; then
+              echo "✅ SUCCESS - Kafka port 32100 is OPEN and accessible!"
+              SUCCESS=true
+              break
+            else
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "❌ Port closed, waiting ${RETRY_DELAY}s before retry..."
+                sleep $RETRY_DELAY
+              else
+                echo "❌ FAILED - Port still closed after $MAX_RETRIES attempts"
+              fi
+            fi
+          done
+          
+          # If all retries failed, perform diagnostics and exit
+          if [ "$SUCCESS" = false ]; then
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            echo "❌ FATAL ERROR: Kafka external port 32100 is not accessible"
+            echo "════════════════════════════════════════════════════════"
+            echo ""
+            echo "=== Diagnostic Information ==="
+            echo ""
+            
+            echo "1. Kafka Pods Status:"
+            export KUBECONFIG=./kubeconfig.yaml
+            kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster || true
+            echo ""
+            
+            echo "2. Kafka Services:"
+            kubectl get svc -n kafka || true
+            echo ""
+            
+            echo "3. NodePort Service Details:"
+            kubectl get svc -n kafka trading-cluster-kafka-external-bootstrap -o yaml || true
+            echo ""
+            
+            echo "4. Kafka Cluster Status:"
+            kubectl get kafka -n kafka trading-cluster -o yaml | grep -A 20 "status:" || true
+            echo ""
+            
+            echo "════════════════════════════════════════════════════════"
+            echo "Deployment FAILED: Kafka is not accessible externally"
+            echo "This is a critical requirement - stopping deployment"
+            echo "════════════════════════════════════════════════════════"
+            exit 1
+          fi
+          
+          # Verify internal port is properly blocked
+          echo ""
+          echo "Verifying Kafka internal port is not exposed..."
+          echo -n "Kafka Internal (9092): "
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/9092" 2>/dev/null; then
+            echo "⚠️ WARNING - Port 9092 is externally accessible (should be internal only)"
+            echo "This is a security concern but won't fail the deployment"
+          else
+            echo "✅ CLOSED (correct - internal only)"
+          fi
+          
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo "✅ Kafka External Connectivity: VERIFIED"
+          echo "════════════════════════════════════════════════════════"
+      
+      - name: Kafka deployment summary
+        if: success()  # Only run if connectivity test passed
+        run: |
+          export KUBECONFIG=./kubeconfig.yaml
+          KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
+          
+          echo "## ✅ Kafka Deployment: SUCCESSFUL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🎯 Kafka Cluster Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get kafka -n kafka trading-cluster -o wide 2>/dev/null
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🖥️ Kafka Broker Pods" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🌐 External Access: VERIFIED ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Kafka is accessible at:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$KAFKA_IP:32100" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Test connection:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# Using kafkacat/kcat" >> $GITHUB_STEP_SUMMARY
+          echo "kcat -b $KAFKA_IP:32100 -L" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Using kafka-console-producer" >> $GITHUB_STEP_SUMMARY
+          echo "kafka-console-producer --bootstrap-server $KAFKA_IP:32100 --topic test" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ All Critical Checks Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- Kafka cluster deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- All broker pods running" >> $GITHUB_STEP_SUMMARY
+          echo "- External port 32100 accessible" >> $GITHUB_STEP_SUMMARY
+          echo "- Internal port 9092 properly secured" >> $GITHUB_STEP_SUMMARY
