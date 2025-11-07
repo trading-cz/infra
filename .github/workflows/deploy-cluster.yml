@@ -613,12 +613,30 @@ jobs:
           
           echo "=== Waiting for Kafka cluster deployment (up to 5 minutes) ==="
           
-          # Wait for Kafka resource to exist
+          # Wait for Kafka resource to exist (fail fast if cluster unreachable)
           TIMEOUT=300  # 5 minutes is realistic for ArgoCD sync + Kafka deployment
           ELAPSED=0
-          until kubectl get kafka -n kafka trading-cluster 2>/dev/null || [ $ELAPSED -ge $TIMEOUT ]; do
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # Check if workflow was cancelled
+            if [ -n "${RUNNER_STOPPING:-}" ]; then
+              echo "⚠️  Workflow cancelled, exiting gracefully..."
+              exit 0
+            fi
+            
+            # Check if kubectl can connect at all (fail fast if cluster destroyed)
+            if ! kubectl cluster-info >/dev/null 2>&1; then
+              echo "❌ FATAL: Cannot connect to Kubernetes cluster (destroyed or unreachable)"
+              exit 1
+            fi
+            
+            # Check if Kafka resource exists
+            if kubectl get kafka -n kafka trading-cluster 2>/dev/null; then
+              break  # Success!
+            fi
+            
             echo "[$ELAPSED/$TIMEOUT s] Waiting for Kafka resource..."
-            sleep 10  # Check every 10 seconds
+            sleep 10
             ELAPSED=$((ELAPSED + 10))
           done
           
@@ -660,6 +678,12 @@ jobs:
       
       - name: Test Kafka external connectivity with retry
         run: |
+          # Check if workflow was cancelled before starting tests
+          if [ -n "${RUNNER_STOPPING:-}" ]; then
+            echo "⚠️  Workflow cancelled, skipping Kafka tests..."
+            exit 0
+          fi
+          
           KAFKA_IP="${{ needs.terraform.outputs.kafka_external_ip }}"
           MAX_RETRIES=5
           RETRY_DELAY=10
