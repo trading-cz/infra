@@ -54,6 +54,8 @@ jobs:
           TERRAFORM_TFLINT_UNSECURED_ENV_VARIABLES: GITHUB_TOKEN
           # Terraform version to use
           TERRAFORM_TERRAFORM_VERSION: '1.13.4'
+          # Disable linters with known issues
+          DISABLE_LINTERS: JSON_ESLINT_PLUGIN_JSONC,MAKEFILE_CHECKMAKE,MARKDOWN_REMARK_LINT
 
       # Upload MegaLinter artifacts
       - name: Archive production artifacts

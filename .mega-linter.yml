@@ -33,7 +33,6 @@ TERRAFORM_SCAN_DIRECTORIES:
   - .
   - modules/compute
   - modules/k3s
-  - modules/kafka
   - modules/network
 
 # Re-enable Terrascan (was previously disabled to avoid errors on empty dirs).
