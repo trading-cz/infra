@@ -6,6 +6,7 @@ namespace: kafka
 resources:
   - kafka-metrics-config.yaml
   - kafka-cluster.yaml
+  - users/trading-app-user.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: trading-system
