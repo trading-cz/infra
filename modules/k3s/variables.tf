@@ -1,9 +1,3 @@
-variable "k3s_token" {
-  description = "K3s cluster token"
-  type        = string
-  default     = ""
-}
-
 variable "control_plane_name" {
   description = "Name of the control plane server"
   type        = string
