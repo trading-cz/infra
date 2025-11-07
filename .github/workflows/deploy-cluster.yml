@@ -325,6 +325,7 @@ jobs:
     name: Verify Infrastructure Connectivity
     needs: terraform
     runs-on: ubuntu-latest
+    if: success()  # Only run if terraform succeeded
     
     steps:
       - name: Extract IPs from terraform job
@@ -447,6 +448,7 @@ jobs:
     needs: [terraform, verify-infrastructure]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    if: success()  # Only run if infrastructure verification succeeded
     
     steps:
       - name: Checkout code
@@ -490,10 +492,20 @@ jobs:
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Checking Strimzi Operator ==="
-          kubectl get pods -n kafka || echo "⚠️ Strimzi not ready yet"
           
-          # Wait for Strimzi if not ready (2 minutes max)
-          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=120s || true
+          # Wait for Strimzi operator to be ready (REQUIRED - fail if not ready)
+          if ! kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=120s; then
+            echo "❌ FATAL: Strimzi operator not ready after 2 minutes"
+            echo ""
+            kubectl get pods -n kafka
+            echo ""
+            kubectl describe pod -l name=strimzi-cluster-operator -n kafka | tail -30
+            echo ""
+            echo "Deployment failed: Strimzi operator is required for Kafka deployment"
+            exit 1
+          fi
+          
+          echo "✅ Strimzi operator is ready"
           kubectl get pods -n kafka
       
       - name: Verify ArgoCD Installation  
@@ -501,10 +513,20 @@ jobs:
           export KUBECONFIG=./kubeconfig.yaml
           
           echo "=== Checking ArgoCD ==="
-          kubectl get pods -n argocd || echo "⚠️ ArgoCD not ready yet"
           
-          # Wait for ArgoCD if not ready (2 minutes max)
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=120s || true
+          # Wait for ArgoCD application controller to be ready (REQUIRED)
+          if ! kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-application-controller -n argocd --timeout=120s; then
+            echo "❌ FATAL: ArgoCD application controller not ready after 2 minutes"
+            echo ""
+            kubectl get pods -n argocd
+            echo ""
+            kubectl describe pod -l app.kubernetes.io/name=argocd-application-controller -n argocd | tail -30
+            echo ""
+            echo "Deployment failed: ArgoCD is required for GitOps deployment"
+            exit 1
+          fi
+          
+          echo "✅ ArgoCD application controller is ready"
           kubectl get pods -n argocd
       
       - name: Verify ArgoCD Parent Application
@@ -533,7 +555,7 @@ jobs:
           kubectl get pods -A
       
       - name: Cluster Bootstrap Summary
-        if: always()
+        if: success() || failure()  # Show summary if completed, but not if cancelled
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
@@ -593,7 +615,7 @@ jobs:
     name: Verify Kafka External Access
     needs: [terraform, post-setup]
     runs-on: ubuntu-latest
-    if: always()  # Run even if post-setup has warnings
+    if: success()  # Only run if post-setup succeeded (cluster is healthy)
     
     steps:
       - name: Download kubeconfig
@@ -611,10 +633,10 @@ jobs:
         run: |
           export KUBECONFIG=./kubeconfig.yaml
           
-          echo "=== Waiting for Kafka cluster deployment (up to 5 minutes) ==="
+          echo "=== Waiting for Kafka cluster deployment (up to 3 minutes) ==="
           
           # Wait for Kafka resource to exist (fail fast if cluster unreachable)
-          TIMEOUT=300  # 5 minutes is realistic for ArgoCD sync + Kafka deployment
+          TIMEOUT=120  # 2 minutes - Kafka should deploy in 2-3 min if healthy
           ELAPSED=0
           
           while [ $ELAPSED -lt $TIMEOUT ]; do
@@ -636,8 +658,8 @@ jobs:
             fi
             
             echo "[$ELAPSED/$TIMEOUT s] Waiting for Kafka resource..."
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
           done
           
           if ! kubectl get kafka -n kafka trading-cluster 2>/dev/null; then
