@@ -126,32 +126,120 @@ jobs:
           echo "Server ID: ${KAFKA_NODE_0_ID}"
           echo "Primary IP ID: ${PRIMARY_IP_ID}"
           
-          # Install hcloud CLI
+          # Install hcloud CLI and jq
+          echo "Installing hcloud CLI..."
           curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
           chmod +x hcloud
           
-          # Power off kafka-0 (required for IP assignment)
-          echo "Powering off kafka-0..."
-          ./hcloud server poweroff ${KAFKA_NODE_0_ID}
+          echo "Installing jq..."
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq > /dev/null
           
-          # Wait for power off
-          echo "Waiting for shutdown..."
-          sleep 10
+          # Check current assignment of Primary IP
+          echo ""
+          echo "Checking current Primary IP assignment..."
+          CURRENT_ASSIGNMENT=$(./hcloud primary-ip describe ${PRIMARY_IP_ID} -o json | jq -r '.assignee_id // "null"')
+          
+          if [ "$CURRENT_ASSIGNMENT" != "null" ] && [ "$CURRENT_ASSIGNMENT" != "$KAFKA_NODE_0_ID" ]; then
+            echo "⚠️  Primary IP is currently assigned to server ID: ${CURRENT_ASSIGNMENT}"
+            echo "Unassigning from current server..."
+            ./hcloud primary-ip unassign ${PRIMARY_IP_ID} || {
+              echo "❌ Failed to unassign Primary IP from previous server"
+              exit 1
+            }
+            sleep 5
+          elif [ "$CURRENT_ASSIGNMENT" = "$KAFKA_NODE_0_ID" ]; then
+            echo "✅ Primary IP already assigned to kafka-0 (ID: ${KAFKA_NODE_0_ID})"
+            echo "   Skipping assignment - kafka-0 already has the correct IP"
+            exit 0
+          fi
+          
+          # Power off kafka-0 (required for IP assignment)
+          echo ""
+          echo "Powering off kafka-0..."
+          if ! ./hcloud server poweroff ${KAFKA_NODE_0_ID}; then
+            echo "❌ Failed to power off kafka-0"
+            exit 1
+          fi
+          
+          # Wait for complete shutdown with verification
+          echo "Waiting for shutdown (up to 60 seconds)..."
+          for i in {1..12}; do
+            STATUS=$(./hcloud server describe ${KAFKA_NODE_0_ID} -o json | jq -r '.status')
+            if [ "$STATUS" = "off" ]; then
+              echo "✅ kafka-0 is powered off"
+              break
+            fi
+            echo "[$i/12] Status: $STATUS - waiting..."
+            sleep 5
+          done
+          
+          # Verify it's actually off
+          FINAL_STATUS=$(./hcloud server describe ${KAFKA_NODE_0_ID} -o json | jq -r '.status')
+          if [ "$FINAL_STATUS" != "off" ]; then
+            echo "❌ kafka-0 did not power off properly (status: $FINAL_STATUS)"
+            exit 1
+          fi
           
           # Assign Primary IP
-          echo "Assigning Primary IP..."
-          ./hcloud primary-ip assign --server ${KAFKA_NODE_0_ID} ${PRIMARY_IP_ID}
+          echo ""
+          echo "Assigning Primary IP to kafka-0..."
+          if ! ./hcloud primary-ip assign ${PRIMARY_IP_ID} ${KAFKA_NODE_0_ID}; then
+            echo "❌ Failed to assign Primary IP to kafka-0"
+            exit 1
+          fi
+          
+          # Verify assignment
+          VERIFY_ASSIGNMENT=$(./hcloud primary-ip describe ${PRIMARY_IP_ID} -o json | jq -r '.assignee_id')
+          if [ "$VERIFY_ASSIGNMENT" != "$KAFKA_NODE_0_ID" ]; then
+            echo "❌ Primary IP assignment verification failed!"
+            echo "   Expected: ${KAFKA_NODE_0_ID}"
+            echo "   Got: ${VERIFY_ASSIGNMENT}"
+            exit 1
+          fi
+          echo "✅ Primary IP assignment verified"
           
           # Power on kafka-0
+          echo ""
           echo "Powering on kafka-0..."
-          ./hcloud server poweron ${KAFKA_NODE_0_ID}
+          if ! ./hcloud server poweron ${KAFKA_NODE_0_ID}; then
+            echo "❌ Failed to power on kafka-0"
+            exit 1
+          fi
           
-          # Wait for boot
-          echo "Waiting for kafka-0 to boot..."
-          sleep 30
+          # Wait for boot and verify SSH access
+          echo "Waiting for kafka-0 to boot (up to 120 seconds)..."
+          SSH_READY=false
+          for i in {1..24}; do
+            STATUS=$(./hcloud server describe ${KAFKA_NODE_0_ID} -o json | jq -r '.status')
+            echo "[$i/24] Server status: $STATUS"
+            
+            if [ "$STATUS" = "running" ]; then
+              # Server is running, test SSH
+              if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${KAFKA_EXTERNAL_IP}/22" 2>/dev/null; then
+                echo "✅ kafka-0 is running and SSH is accessible"
+                SSH_READY=true
+                break
+              fi
+            fi
+            sleep 5
+          done
           
+          if [ "$SSH_READY" = false ]; then
+            echo "❌ kafka-0 did not become SSH-accessible within timeout"
+            echo ""
+            echo "=== Diagnostics ==="
+            ./hcloud server describe ${KAFKA_NODE_0_ID}
+            exit 1
+          fi
+          
+          echo ""
+          echo "════════════════════════════════════════════════════════"
           echo "✅ Primary IP #2 successfully assigned to kafka-0!"
           echo "   Kafka external IP: ${KAFKA_EXTERNAL_IP}"
+          echo "   Server ID: ${KAFKA_NODE_0_ID}"
+          echo "   Primary IP ID: ${PRIMARY_IP_ID}"
+          echo "   SSH: Accessible ✅"
+          echo "════════════════════════════════════════════════════════"
             
       - name: Fetch kubeconfig
         run: |
@@ -294,12 +382,30 @@ jobs:
           
           echo "=== Testing Kafka Node SSH ($KAFKA_IP) ==="
           
-          # Test SSH (port 22) - should be open
+          # Test SSH (port 22) - MUST be open (critical check)
           echo -n "SSH (22): "
           if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
             echo "✅ OPEN"
           else
             echo "❌ CLOSED"
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            echo "❌ CRITICAL ERROR: Kafka node SSH is not accessible!"
+            echo "════════════════════════════════════════════════════════"
+            echo ""
+            echo "This indicates Primary IP #2 was not properly assigned to kafka-0."
+            echo ""
+            echo "Troubleshooting:"
+            echo "1. Check 'Assign Primary IP to kafka-0' step logs"
+            echo "2. Verify kafka-0 is powered on"
+            echo "3. Check Hetzner firewall rules"
+            echo "4. Verify Primary IP assignment in Hetzner console"
+            echo ""
+            echo "Expected IP: $KAFKA_IP"
+            echo "Expected server: kafka-0 (from dev/prod environment)"
+            echo ""
+            echo "════════════════════════════════════════════════════════"
+            exit 1
           fi
       
       - name: Infrastructure Summary
@@ -355,7 +461,7 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: 'v1.30.0'
+          version: 'v1.34.0'  # Match K3s v1.34.1+k3s1
       
       - name: Wait for cloud-init to complete
         run: |
@@ -366,7 +472,18 @@ jobs:
           sleep 180  # Give cloud-init time to run
           
           echo "=== Checking cluster readiness ==="
-          kubectl get nodes
+          NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
+          echo "Current nodes: $NODE_COUNT/4 (need 1 control + 3 kafka workers)"
+          kubectl get nodes -o wide
+          
+          if [ "$NODE_COUNT" -lt 4 ]; then
+            echo ""
+            echo "⚠️  WARNING: Only $NODE_COUNT node(s) joined the cluster!"
+            echo "Expected: 4 nodes (1 control plane + 3 kafka workers)"
+            echo ""
+            echo "This will cause pods to remain in Pending state."
+            echo "Check worker node cloud-init logs on the servers."
+          fi
       
       - name: Verify Strimzi Installation
         run: |
@@ -488,7 +605,7 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: 'v1.30.0'
+          version: 'v1.34.0'  # Match K3s v1.34.1+k3s1
       
       - name: Wait for Kafka cluster to be ready
         run: |

@@ -50,8 +50,26 @@ if [ $FINAL_COUNT -ge 4 ]; then
   echo "✅ All worker nodes joined! ($FINAL_COUNT nodes total)"
   kubectl get nodes
 else
-  echo "⚠️  Warning: Only $FINAL_COUNT nodes joined after $${TIMEOUT}s"
+  echo "❌ ERROR: Only $FINAL_COUNT nodes joined after $${TIMEOUT}s"
+  echo ""
   kubectl get nodes
+  echo ""
+  echo "Expected: 4 nodes (1 control + 3 kafka workers)"
+  echo "Got: $FINAL_COUNT nodes"
+  echo ""
+  echo "Worker nodes failed to join the cluster!"
+  echo "This will cause all workload pods to remain Pending."
+  echo ""
+  echo "Check worker node cloud-init logs:"
+  echo "  ssh root@<kafka-node-ip> 'tail -100 /var/log/cloud-init-output.log'"
+  echo ""
+  echo "Common causes:"
+  echo "  - Control plane not accessible from worker nodes (network issue)"
+  echo "  - K3s token mismatch"
+  echo "  - Worker nodes still booting"
+  echo ""
+  # Don't fail - just warn (cloud-init should not fail completely)
+  echo "⚠️  Continuing with installation but expect failures..."
 fi
 
 # Taint control plane to prevent regular workloads from scheduling here
