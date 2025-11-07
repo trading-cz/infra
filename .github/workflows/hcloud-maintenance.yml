@@ -21,8 +21,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install hcloud CLI
+      - name: Setup Hetzner CLI
         uses: hetznercloud/setup-hcloud@v1
+        with:
+          hcloud-version: latest
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
