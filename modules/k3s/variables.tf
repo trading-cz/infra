@@ -78,3 +78,21 @@ variable "kafka_server_type" {
   description = "Type of Kafka worker server"
   type        = string
 }
+
+variable "app_node_count" {
+  description = "Number of application worker nodes (for Python apps)"
+  type        = number
+  default     = 0
+}
+
+variable "app_server_type" {
+  description = "Type of application worker server"
+  type        = string
+  default     = "cx22" # Budget: 2 vCPU, 4GB RAM, x86_64
+}
+
+variable "app_user_data" {
+  description = "User data for app worker initialization"
+  type        = string
+  default     = ""
+}

@@ -30,12 +30,21 @@ module "k3s" {
     node_ip     = "10.0.1.20"
     node_label  = "node-role.kubernetes.io/kafka=true"
   })
+  app_user_data = templatefile("${path.module}/templates/worker-init.sh", {
+    k3s_version = var.k3s_version
+    k3s_token   = var.k3s_token
+    k3s_url     = "https://10.0.1.10:6443"
+    node_ip     = "10.0.1.30"
+    node_label  = "node-role.kubernetes.io/app=true"
+  })
   network_id        = module.network.network_id
   firewall_id       = module.network.firewall_id
   ssh_key_id        = module.compute.ssh_key_id
   location          = var.location
   kafka_node_count  = var.kafka_node_count
   kafka_server_type = var.kafka_server_type
+  app_node_count    = var.app_node_count
+  app_server_type   = var.app_server_type
   labels = {
     environment = var.environment
     managed_by  = "terraform"

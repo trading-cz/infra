@@ -32,6 +32,13 @@ done
 echo "=== K3s Control Plane Ready ==="
 kubectl get nodes
 
+# Taint control plane to prevent regular workloads from scheduling here
+# Only ArgoCD and system components should run on control plane
+echo "Adding taint to control plane to prevent regular workloads..."
+kubectl taint nodes --all node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite || true
+
+echo "✅ Control plane configured with NoSchedule taint"
+
 # =============================================================================
 # INSTALL STRIMZI OPERATOR
 # =============================================================================

@@ -34,13 +34,13 @@ variable "ssh_private_key" {
 variable "control_plane_server_type" {
   description = "Hetzner server type for control plane"
   type        = string
-  default     = "cpx21" # 3 vCPU, 4GB RAM
+  default     = "cax21" # 4 vCPU, 8GB RAM, ARM64
 }
 
 variable "kafka_server_type" {
   description = "Hetzner server type for Kafka nodes"
   type        = string
-  default     = "cpx31" # 4 vCPU, 8GB RAM
+  default     = "cx22" # 2 vCPU, 4GB RAM, x86_64 (consider cax21 ARM for upgrade)
 }
 
 variable "kafka_node_count" {
@@ -51,6 +51,18 @@ variable "kafka_node_count" {
     condition     = var.kafka_node_count % 2 == 1 && var.kafka_node_count >= 3
     error_message = "Kafka node count must be odd and at least 3 for quorum."
   }
+}
+
+variable "app_server_type" {
+  description = "Hetzner server type for application worker nodes"
+  type        = string
+  default     = "cx22" # 2 vCPU, 4GB RAM, x86_64 - cheapest available
+}
+
+variable "app_node_count" {
+  description = "Number of application worker nodes for Python apps"
+  type        = number
+  default     = 0
 }
 
 # Network configuration

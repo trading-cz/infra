@@ -80,10 +80,42 @@ resource "hcloud_server" "kafka_nodes" {
   user_data = var.worker_user_data
 }
 
+resource "hcloud_server" "app_nodes" {
+  count = var.app_node_count
+
+  name        = "${var.cluster_name}-${var.environment}-app-${count.index}"
+  server_type = var.app_server_type
+  image       = "ubuntu-24.04"
+  location    = var.location
+  ssh_keys    = [var.ssh_key_id]
+  firewall_ids = [var.firewall_id]
+
+  labels = merge(
+    var.labels,
+    {
+      "node-role" = "app"
+    }
+  )
+
+  public_net {
+    # No public IP - app nodes are private only
+    ipv4_enabled = false
+    ipv6_enabled = false
+  }
+
+  network {
+    network_id = var.network_id
+    ip         = "10.0.1.${30 + count.index}"
+  }
+
+  user_data = var.app_user_data
+}
+
 resource "null_resource" "wait_for_k3s" {
   depends_on = [
     hcloud_server.control_plane,
-    hcloud_server.kafka_nodes
+    hcloud_server.kafka_nodes,
+    hcloud_server.app_nodes
   ]
 
   provisioner "local-exec" {
