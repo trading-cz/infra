@@ -135,7 +135,3 @@ module "compute" {
   firewall_id = module.network.firewall_id
 }
 
-module "kafka" {
-  source = "./modules/kafka"
-}
-
