@@ -38,24 +38,24 @@ echo "=== Waiting for worker nodes to join cluster ==="
 echo "Expected: 3 kafka workers + 1 control plane = 4 nodes total"
 TIMEOUT=180  # 3 minutes - should be enough with proper firewall rules
 ELAPSED=0
-until [ $(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $ELAPSED -ge $TIMEOUT ]; do
-  CURRENT=$(kubectl get nodes --no-headers | wc -l)
-  echo "[$ELAPSED/$TIMEOUT s] Nodes joined: $CURRENT/4"
+until [ $$(kubectl get nodes --no-headers | wc -l) -ge 4 ] || [ $$ELAPSED -ge $$TIMEOUT ]; do
+  CURRENT=$$(kubectl get nodes --no-headers | wc -l)
+  echo "[$${ELAPSED}/$${TIMEOUT} s] Nodes joined: $${CURRENT}/4"
   sleep 5  # Check every 5 seconds
-  ELAPSED=$((ELAPSED + 5))
+  ELAPSED=$$((ELAPSED + 5))
 done
 
-FINAL_COUNT=$(kubectl get nodes --no-headers | wc -l)
-if [ $FINAL_COUNT -ge 4 ]; then
-  echo "✅ All worker nodes joined! ($FINAL_COUNT nodes total)"
+FINAL_COUNT=$$(kubectl get nodes --no-headers | wc -l)
+if [ $$FINAL_COUNT -ge 4 ]; then
+  echo "✅ All worker nodes joined! ($${FINAL_COUNT} nodes total)"
   kubectl get nodes
 else
-  echo "❌ ERROR: Only $FINAL_COUNT nodes joined after $TIMEOUT s"
+  echo "❌ ERROR: Only $${FINAL_COUNT} nodes joined after $${TIMEOUT} s"
   echo ""
   kubectl get nodes
   echo ""
   echo "Expected: 4 nodes (1 control + 3 kafka workers)"
-  echo "Got: $FINAL_COUNT nodes"
+  echo "Got: $${FINAL_COUNT} nodes"
   echo ""
   echo "TROUBLESHOOTING:"
   echo "1. Check worker node cloud-init logs:"
@@ -85,9 +85,9 @@ echo "✅ Control plane tainted - regular workloads will only run on worker node
 # Label kafka nodes for Kafka pod scheduling
 echo ""
 echo "=== Labeling kafka nodes for workload placement ==="
-for node in $(kubectl get nodes -o name | grep kafka); do
-  kubectl label $node node-role.kubernetes.io/worker=true --overwrite || true
-  kubectl label $node workload-type=kafka --overwrite || true
+for node in $$(kubectl get nodes -o name | grep kafka); do
+  kubectl label $$node node-role.kubernetes.io/worker=true --overwrite || true
+  kubectl label $$node workload-type=kafka --overwrite || true
 done
 echo "✅ Kafka nodes labeled"
 kubectl get nodes --show-labels | grep -E 'NAME|kafka'

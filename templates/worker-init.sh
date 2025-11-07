@@ -18,14 +18,14 @@ ELAPSED=0
 INTERVAL=10
 
 until curl -k ${k3s_url}/readyz &>/dev/null; do
-  if [ $ELAPSED -ge $TIMEOUT ]; then
+  if [ $$ELAPSED -ge $$TIMEOUT ]; then
     echo ""
-    echo "❌ FATAL ERROR: Control plane not ready after ${TIMEOUT}s"
+    echo "❌ FATAL ERROR: Control plane not ready after $${TIMEOUT}s"
     echo ""
     echo "Diagnostics:"
     echo "  - K3s URL: ${k3s_url}"
     echo "  - Node IP: ${node_ip}"
-    echo "  - Current time: $(date)"
+    echo "  - Current time: $$(date)"
     echo ""
     echo "Possible causes:"
     echo "  1. Control plane is still booting (check: hcloud server list)"
@@ -41,9 +41,9 @@ until curl -k ${k3s_url}/readyz &>/dev/null; do
     exit 1
   fi
   
-  echo "[$ELAPSED/$TIMEOUT s] Control plane not ready yet, retrying in ${INTERVAL}s..."
-  sleep $INTERVAL
-  ELAPSED=$((ELAPSED + INTERVAL))
+  echo "[$${ELAPSED}/$${TIMEOUT} s] Control plane not ready yet, retrying in $${INTERVAL}s..."
+  sleep $$INTERVAL
+  ELAPSED=$$((ELAPSED + INTERVAL))
 done
 
 echo "✅ Control plane is ready!"
