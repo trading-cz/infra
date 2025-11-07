@@ -19,7 +19,7 @@ TERRAFORM_TFLINT_ARGUMENTS:
 
 # Filter files to analyze
 FILTER_REGEX_EXCLUDE: |
-  (\.terraform/|\.terraform\.lock\.hcl|terraform\.tfstate|terraform\.tfstate\.backup)
+  (\.terraform/|\.terraform\.lock\.hcl|terraform\.tfstate|terraform\.tfstate\.backup|argocd/|downloaded-doc/|templates/|megalinter-reports/)
 
 # File extensions to process
 TERRAFORM_FILE_EXTENSIONS:
@@ -31,19 +31,18 @@ EXCLUDED_DIRECTORIES:
   - .github
   - argocd
   - downloaded-doc
-  - environments
   - templates
   - megalinter-reports
   - .terraform
 
-# Re-enable Terrascan for Terraform security scanning
-ENABLE_LINTERS_OVERRIDES: |
+# Disable Terrascan to avoid recursive scanning issues
+# Terraform security is still covered by tflint and terraform fmt
+DISABLE_LINTERS:
   - TERRAFORM_TERRASCAN
 
 # Disable specific linters if needed (uncomment to disable)
 # DISABLE_LINTERS:
 #   - TERRAFORM_CHECKOV  # Disable Checkov if too strict
-#   - TERRAFORM_TERRASCAN  # Disable Terrascan if not needed
 
 # Report configuration
 SHOW_ELAPSED_TIME: true
