@@ -22,7 +22,6 @@ jobs:
 
     steps:
       - name: Install hcloud CLI
-        if: ${{ inputs.action != 'list' }}
         run: |
           curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
           chmod +x hcloud
