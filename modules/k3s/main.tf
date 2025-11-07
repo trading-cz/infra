@@ -1,4 +1,6 @@
 terraform {
+  required_version = ">= 1.13.0"
+
   required_providers {
     hcloud = {
       source  = "hetznercloud/hcloud"
@@ -21,10 +23,6 @@ terraform {
 resource "random_password" "k3s_token" {
   length  = 32
   special = false
-}
-
-locals {
-  k3s_token = var.k3s_token != "" ? var.k3s_token : random_password.k3s_token.result
 }
 
 resource "hcloud_server" "control_plane" {

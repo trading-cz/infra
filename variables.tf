@@ -24,12 +24,6 @@ variable "ssh_public_key" {
   type        = string
 }
 
-variable "ssh_private_key" {
-  description = "SSH private key for server provisioning"
-  type        = string
-  sensitive   = true
-}
-
 # Server configurations
 variable "control_plane_server_type" {
   description = "Hetzner server type for control plane"

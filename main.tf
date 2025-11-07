@@ -55,7 +55,6 @@ module "k3s" {
 
 module "network" {
   source           = "./modules/network"
-  hcloud_token     = var.hcloud_token
   network_name     = "${var.cluster_name}-${var.environment}-network"
   network_ip_range = var.network_ip_range
   network_zone     = var.network_zone
@@ -123,7 +122,6 @@ module "network" {
 
 module "compute" {
   source         = "./modules/compute"
-  hcloud_token   = var.hcloud_token
   ssh_key_name   = "${var.cluster_name}-${var.environment}"
   ssh_public_key = var.ssh_public_key
   common_labels = {
@@ -131,7 +129,5 @@ module "compute" {
     managed_by  = "terraform"
     cluster     = var.cluster_name
   }
-  network_id  = module.network.network_id
-  firewall_id = module.network.firewall_id
 }
 

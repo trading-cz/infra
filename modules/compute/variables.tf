@@ -1,6 +1,14 @@
-variable "hcloud_token" {}
-variable "ssh_key_name" {}
-variable "ssh_public_key" {}
-variable "common_labels" { type = map(string) }
-variable "network_id" {}
-variable "firewall_id" {}
+variable "ssh_key_name" {
+  description = "Name of the SSH key"
+  type        = string
+}
+
+variable "ssh_public_key" {
+  description = "SSH public key content"
+  type        = string
+}
+
+variable "common_labels" {
+  description = "Common labels for all resources"
+  type        = map(string)
+}
