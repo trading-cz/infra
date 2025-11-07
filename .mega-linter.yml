@@ -26,6 +26,21 @@ TERRAFORM_FILE_EXTENSIONS:
   - .tf
   - .tfvars
 
+# Limit Terraform linters to directories that actually contain Terraform code
+# to avoid scanning docs, templates and other non-TF folders in this repo.
+# Re-enable Terrascan and only scan the listed directories.
+TERRAFORM_SCAN_DIRECTORIES:
+  - .
+  - modules/compute
+  - modules/k3s
+  - modules/kafka
+  - modules/network
+
+# Re-enable Terrascan (was previously disabled to avoid errors on empty dirs).
+# If you prefer to keep it disabled, remove the following block.
+ENABLE_LINTERS_OVERRIDES: |
+  - TERRAFORM_TERRASCAN
+
 # Disable specific linters if needed (uncomment to disable)
 # DISABLE_LINTERS:
 #   - TERRAFORM_CHECKOV  # Disable Checkov if too strict

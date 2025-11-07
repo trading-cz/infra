@@ -12,12 +12,9 @@ on:
       - main
       - production
     paths:
-      - '**.tf'
-      - 'modules/**'
-      - 'environments/**'
-      - 'templates/**'
-      - '.github/workflows/**'
-      - '.mega-linter.yml'
+      # Trigger only when Terraform files change anywhere in the repo
+      - '**/*.tf'
+      - '**/*.tfvars'
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
