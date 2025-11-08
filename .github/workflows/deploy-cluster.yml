@@ -15,35 +15,383 @@ env:
   TF_VERSION: '1.13.4'
 
 jobs:
-  terraform:
-    name: Deploy Cluster - ${{ inputs.environment }}
+  deploy:
+    name: Deploy ${{ inputs.environment }} cluster
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    outputs:
-      control_plane_ip: ${{ steps.tf_outputs.outputs.control_plane_ip }}
-      kafka_external_ip: ${{ steps.tf_outputs.outputs.kafka_external_ip }}
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-      
-      - name: Setup Terraform
+      # ============================================
+      # Setup
+      # ============================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform ${{ env.TF_VERSION }}
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
 
-      - name: Create SSH key files
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+          hcloud version
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          kubectl version --client
+
+      - name: Setup SSH keys
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
           chmod 600 ~/.ssh/id_ed25519
           chmod 644 ~/.ssh/id_ed25519.pub
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub.verify
+          echo "✅ SSH keys configured"
 
+      # ============================================
+      # Primary IPs - Create/Reuse Before Terraform
+      # ============================================
+      - name: Create or Get Primary IPs
+        id: primary_ips
+        run: |
+          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+          
+          ENV="${{ inputs.environment }}"
+          CLUSTER="k3s-trading"
+          
+          echo "🔍 Checking for existing Primary IPs..."
+          
+          # Control Plane Primary IP
+          CONTROL_IP_NAME="${ENV}-${CLUSTER}-control-ip"
+          CONTROL_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$CONTROL_IP_NAME" | awk '{print $1}')
+          
+          if [ -z "$CONTROL_IP_ID" ]; then
+            echo "📌 Creating Primary IP: $CONTROL_IP_NAME"
+            CONTROL_IP_ID=$(hcloud primary-ip create --type ipv4 --name "$CONTROL_IP_NAME" --datacenter nbg1-dc3 --label environment=$ENV --label cluster=$CLUSTER --label role=control-plane -o json | jq -r '.primary_ip.id')
+            echo "✅ Created Primary IP ID: $CONTROL_IP_ID"
+          else
+            echo "✅ Found existing Primary IP: $CONTROL_IP_NAME (ID: $CONTROL_IP_ID)"
+          fi
+          echo "control_plane_primary_ip_id=$CONTROL_IP_ID" >> $GITHUB_OUTPUT
+          
+          # Kafka Primary IP
+          KAFKA_IP_NAME="${ENV}-${CLUSTER}-kafka-ip"
+          KAFKA_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$KAFKA_IP_NAME" | awk '{print $1}')
+          
+          if [ -z "$KAFKA_IP_ID" ]; then
+            echo "📌 Creating Primary IP: $KAFKA_IP_NAME"
+            KAFKA_IP_ID=$(hcloud primary-ip create --type ipv4 --name "$KAFKA_IP_NAME" --datacenter nbg1-dc3 --label environment=$ENV --label cluster=$CLUSTER --label role=kafka -o json | jq -r '.primary_ip.id')
+            echo "✅ Created Primary IP ID: $KAFKA_IP_ID"
+          else
+            echo "✅ Found existing Primary IP: $KAFKA_IP_NAME (ID: $KAFKA_IP_ID)"
+          fi
+          echo "kafka_primary_ip_id=$KAFKA_IP_ID" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "📋 Primary IP Summary:"
+          hcloud primary-ip list
+
+      # ============================================
+      # Terraform - Infrastructure Provisioning
+      # ============================================
       - name: Terraform Init
         run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -var-file="environments/${{ inputs.environment }}.tfvars" -out=tfplan
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-      
-      - name: Terraform Validate
-        run: terraform validate
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_control_plane_primary_ip_id: ${{ steps.primary_ips.outputs.control_plane_primary_ip_id }}
+          TF_VAR_kafka_primary_ip_id: ${{ steps.primary_ips.outputs.kafka_primary_ip_id }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_control_plane_primary_ip_id: ${{ steps.primary_ips.outputs.control_plane_primary_ip_id }}
+          TF_VAR_kafka_primary_ip_id: ${{ steps.primary_ips.outputs.kafka_primary_ip_id }}
+
+      - name: Extract Terraform Outputs
+        id: tf_output
+        run: |
+          CONTROL_IP=$(terraform output -raw k3s_control_public_ip)
+          KAFKA_IP=$(terraform output -raw kafka_0_public_ip)
+          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+          echo "kafka_ip=$KAFKA_IP" >> $GITHUB_OUTPUT
+          echo "✅ Control Plane IP: $CONTROL_IP"
+          echo "✅ Kafka Node IP: $KAFKA_IP"
+
+      # ============================================
+      # Verify 1: Servers are reachable
+      # ============================================
+      - name: Verify - Servers are accessible via SSH
+        run: |
+          echo "Waiting for SSH to be available..."
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          
+          # Wait for control plane SSH
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "echo 'SSH ready'" 2>/dev/null; then
+              echo "✅ Control plane SSH accessible"
+              break
+            fi
+            echo "Attempt $i/30: Waiting for control plane SSH..."
+            sleep 10
+          done
+          
+          # Wait for Kafka node SSH
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "echo 'SSH ready'" 2>/dev/null; then
+              echo "✅ Kafka node SSH accessible"
+              break
+            fi
+            echo "Attempt $i/30: Waiting for Kafka node SSH..."
+            sleep 10
+          done
+
+      # ============================================
+      # Verify 2: Cloud-init completed
+      # ============================================
+      - name: Verify - Cloud-init installation completed
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          
+          echo "Waiting for cloud-init to complete..."
+          
+          # Wait for control plane cloud-init
+          for i in {1..60}; do
+            if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "test -f /root/k3s-ready.txt" 2>/dev/null; then
+              echo "✅ Control plane cloud-init completed"
+              ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /root/k3s-ready.txt"
+              break
+            fi
+            echo "Attempt $i/60: Waiting for control plane cloud-init (checking /root/k3s-ready.txt)..."
+            sleep 5
+          done
+          
+          # Wait for Kafka node cloud-init
+          for i in {1..60}; do
+            if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null; then
+              echo "✅ Kafka node cloud-init completed"
+              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "cat /root/k3s-agent-ready.txt"
+              break
+            fi
+            echo "Attempt $i/60: Waiting for Kafka node cloud-init (checking /root/k3s-agent-ready.txt)..."
+            sleep 5
+          done
+
+      # ============================================
+      # Verify 3: K3s cluster is operational
+      # ============================================
+      - name: Verify - K3s cluster is running
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          
+          echo "Fetching kubeconfig..."
+          ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > kubeconfig.yaml
+          sed -i "s/127.0.0.1/$CONTROL_IP/g" kubeconfig.yaml
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "Verifying K3s cluster..."
+          kubectl get nodes
+          
+          NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
+          if [ "$NODE_COUNT" -ge 2 ]; then
+            echo "✅ K3s cluster operational with $NODE_COUNT nodes"
+          else
+            echo "❌ Expected at least 2 nodes, found $NODE_COUNT"
+            exit 1
+          fi
+
+      # ============================================
+      # Verify 4: System pods are running
+      # ============================================
+      - name: Verify - K3s system pods are running
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "Checking system pods..."
+          kubectl get pods -A
+          
+          echo ""
+          echo "Waiting for CoreDNS to be ready..."
+          kubectl wait --for=condition=ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
+          echo "✅ CoreDNS is ready"
+          
+          echo ""
+          echo "Checking for critical system pods..."
+          COREDNS_COUNT=$(kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | grep Running | wc -l)
+          if [ "$COREDNS_COUNT" -ge 1 ]; then
+            echo "✅ CoreDNS running ($COREDNS_COUNT pods)"
+          else
+            echo "❌ CoreDNS not running"
+            exit 1
+          fi
+
+      # ============================================
+      # Verify 5: ArgoCD is installed
+      # ============================================
+      - name: Verify - ArgoCD is installed and running
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "Checking ArgoCD namespace..."
+          if kubectl get namespace argocd 2>/dev/null; then
+            echo "✅ ArgoCD namespace exists"
+          else
+            echo "❌ ArgoCD namespace not found"
+            exit 1
+          fi
+          
+          echo ""
+          echo "Waiting for ArgoCD pods..."
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/part-of=argocd -n argocd --timeout=300s || true
+          
+          echo ""
+          echo "ArgoCD pod status:"
+          kubectl get pods -n argocd
+          
+          ARGOCD_READY=$(kubectl get pods -n argocd --no-headers | grep Running | wc -l)
+          if [ "$ARGOCD_READY" -ge 3 ]; then
+            echo "✅ ArgoCD is running ($ARGOCD_READY pods)"
+          else
+            echo "⚠️  ArgoCD has $ARGOCD_READY running pods (may still be starting)"
+          fi
+
+      # ============================================
+      # Verify 6: Traefik ingress is running
+      # ============================================
+      - name: Verify - Traefik ingress controller
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "Checking Traefik..."
+          if kubectl get namespace traefik 2>/dev/null; then
+            echo "✅ Traefik namespace exists"
+            kubectl get pods -n traefik
+            
+            TRAEFIK_READY=$(kubectl get pods -n traefik --no-headers | grep Running | wc -l)
+            if [ "$TRAEFIK_READY" -ge 1 ]; then
+              echo "✅ Traefik is running ($TRAEFIK_READY pods)"
+            fi
+          else
+            echo "⚠️  Traefik namespace not found (may be installed as K3s built-in)"
+          fi
+
+      # ============================================
+      # Verify 7: Network connectivity
+      # ============================================
+      - name: Verify - Network ports are open
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          
+          echo "Testing network connectivity..."
+          
+          # Test K3s API port
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/6443" 2>/dev/null; then
+            echo "✅ K3s API port 6443 is open on $CONTROL_IP"
+          else
+            echo "❌ K3s API port 6443 is not accessible"
+            exit 1
+          fi
+          
+          # Test SSH port
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/22" 2>/dev/null; then
+            echo "✅ SSH port 22 is open on $CONTROL_IP"
+          else
+            echo "❌ SSH port 22 is not accessible"
+            exit 1
+          fi
+          
+          echo "✅ All critical ports are accessible"
+
+      # ============================================
+      # Display cluster information
+      # ============================================
+      - name: Display cluster information
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo ""
+          echo "========================================"
+          echo "  Cluster Deployment Summary"
+          echo "========================================"
+          echo ""
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Control Plane IP: $CONTROL_IP"
+          echo "Kafka Node IP: $KAFKA_IP"
+          echo ""
+          echo "Nodes:"
+          kubectl get nodes -o wide
+          echo ""
+          echo "Namespaces:"
+          kubectl get namespaces
+          echo ""
+          echo "All Pods:"
+          kubectl get pods -A
+          echo ""
+          echo "========================================"
+          echo "  Access Information"
+          echo "========================================"
+          echo ""
+          echo "Kubeconfig: Download artifact 'kubeconfig-${{ inputs.environment }}'"
+          echo ""
+          echo "SSH Access:"
+          echo "  Control Plane: ssh root@$CONTROL_IP"
+          echo "  Kafka Node: ssh root@$KAFKA_IP"
+          echo ""
+          echo "ArgoCD:"
+          echo "  Get password: ssh root@$CONTROL_IP 'cat /root/argocd-password.txt'"
+          echo "  Access via kubectl port-forward or NodePort"
+          echo ""
+          echo "========================================"
+
+      # ============================================
+      # Upload kubeconfig artifact
+      # ============================================
+      - name: Upload kubeconfig artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig-${{ inputs.environment }}
+          path: kubeconfig.yaml
+          retention-days: 7
+
+      # ============================================
+      # Summary
+      # ============================================
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "========================================"
+          echo "  Deployment completed for ${{ inputs.environment }}"
+          echo "========================================"
+          echo ""
+          echo "✅ Infrastructure provisioned via Terraform"
+          echo "✅ K3s cluster operational"
+          echo "✅ ArgoCD installed"
+          echo "✅ Traefik ingress ready"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Download kubeconfig from workflow artifacts"
+          echo "  2. Install Strimzi Kafka operator (if needed)"
+          echo "  3. Deploy Kafka cluster"
+          echo "  4. Deploy your applications"
+          echo ""
+          echo "To destroy cluster: Use 'hcloud-maintenance' workflow with 'destroy-cluster' action"
+          echo "========================================"

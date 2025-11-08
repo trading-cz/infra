@@ -1,0 +1,20 @@
+#cloud-config
+
+# Simple K3s installation with ArgoCD
+runcmd:
+  # Update system
+  - apt-get update -y
+  - apt-get install -y curl
+
+  # Install K3s
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --cluster-init" sh -
+
+  # Wait for K3s to be ready
+  - sleep 30
+
+  # Install ArgoCD
+  - kubectl create namespace argocd
+  - kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+  # Make kubeconfig accessible
+  - chmod 644 /etc/rancher/k3s/k3s.yaml

@@ -1,0 +1,9 @@
+#cloud-config
+
+# Simple placeholder for future Kafka installation
+runcmd:
+  # Update system
+  - apt-get update -y
+  - apt-get install -y curl
+
+  # Future: Kafka installation will be managed by Strimzi via ArgoCD
