@@ -11,7 +11,7 @@ provider "hcloud" {
 resource "hcloud_ssh_key" "main" {
   name       = "${var.environment}-${var.cluster_name}-ssh-key"
   public_key = var.ssh_public_key
-  
+
   labels = {
     environment = var.environment
     cluster     = var.cluster_name
@@ -33,7 +33,7 @@ module "network" {
   network_cidr  = var.network_cidr
   subnet_cidr   = var.subnet_cidr
   firewall_name = "${var.environment}-${var.cluster_name}-fw"
-  
+
   labels = {
     environment = var.environment
     cluster     = var.cluster_name

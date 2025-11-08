@@ -12,7 +12,7 @@ terraform {
 resource "hcloud_network" "main" {
   name     = var.network_name
   ip_range = var.network_cidr
-  
+
   labels = var.labels
 }
 

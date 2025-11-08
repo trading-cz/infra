@@ -1,0 +1,116 @@
+# Kafka Cluster - Development Environment
+# Single broker, minimal resources, ephemeral storage
+
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: trading-cluster
+  namespace: kafka
+spec:
+  # ============================================
+  # Kafka Broker Configuration (KRaft mode)
+  # ============================================
+  kafka:
+    version: 4.1.0
+    replicas: 1  # Single broker for dev
+    
+    # Node selector - deploy on kafka worker nodes
+    template:
+      pod:
+        metadata:
+          labels:
+            app: kafka
+            environment: dev
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: workload
+                      operator: In
+                      values:
+                        - kafka
+    
+    # Listeners (internal + external access)
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      
+      - name: external
+        port: 9094
+        type: nodeport
+        tls: false
+        configuration:
+          bootstrap:
+            nodePort: 33333  # External access via Primary IP #2
+    
+    # Resource limits
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+    
+    # Storage (ephemeral for dev - data lost on pod restart)
+    storage:
+      type: ephemeral
+    
+    # Kafka configuration
+    config:
+      # Replication settings (1 broker = no replication)
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      
+      # Log retention (24 hours for dev)
+      log.retention.hours: 24
+      log.segment.bytes: 1073741824  # 1GB segments
+      
+      # Performance tuning
+      num.network.threads: 3
+      num.io.threads: 8
+      socket.send.buffer.bytes: 102400
+      socket.receive.buffer.bytes: 102400
+      socket.request.max.bytes: 104857600
+  
+  # ============================================
+  # Entity Operator (Topic & User Management)
+  # ============================================
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          memory: 128Mi
+          cpu: 100m
+        limits:
+          memory: 256Mi
+          cpu: 200m
+    
+    userOperator:
+      resources:
+        requests:
+          memory: 128Mi
+          cpu: 100m
+        limits:
+          memory: 256Mi
+          cpu: 200m
+  
+  # ============================================
+  # Kafka Exporter (Prometheus Metrics)
+  # ============================================
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 128Mi
+        cpu: 100m
