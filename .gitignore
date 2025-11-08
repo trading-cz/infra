@@ -1,6 +1,40 @@
-.idea
-.ssh
-.terraform/
-.terraform.lock.hcl
+# Terraform files
+**/.terraform/*
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
+crash.log
+crash.*.log
+# *.tfvars - COMMENTED OUT: We need environment tfvars files in Git
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl
+
+# SSH keys
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.ssh/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Backup files
+*.backup
+*.bak
