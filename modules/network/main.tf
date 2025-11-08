@@ -12,6 +12,8 @@ terraform {
 resource "hcloud_network" "main" {
   name     = var.network_name
   ip_range = var.network_cidr
+  
+  labels = var.labels
 }
 
 resource "hcloud_network_subnet" "subnet" {
@@ -22,7 +24,8 @@ resource "hcloud_network_subnet" "subnet" {
 }
 
 resource "hcloud_firewall" "main" {
-  name = var.firewall_name
+  name   = var.firewall_name
+  labels = var.labels
 
   # SSH access
   rule {

@@ -19,3 +19,9 @@ variable "firewall_name" {
   description = "Name of the firewall"
   type        = string
 }
+
+variable "labels" {
+  description = "Labels to apply to network resources"
+  type        = map(string)
+  default     = {}
+}
