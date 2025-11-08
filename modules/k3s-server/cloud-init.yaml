@@ -13,7 +13,7 @@ write_files:
       apt-get install -y curl
       
       echo "$(date): Installing K3s server..."
-      curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable INSTALL_K3S_EXEC="server --cluster-init --disable traefik" sh -
+      curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable INSTALL_K3S_EXEC="server --cluster-init" sh -
       
       echo "$(date): Waiting for K3s to be ready..."
       timeout 300 bash -c 'until kubectl get nodes 2>/dev/null; do sleep 5; done'
