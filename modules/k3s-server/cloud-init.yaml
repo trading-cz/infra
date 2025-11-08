@@ -64,6 +64,14 @@ write_files:
       echo "$(date): Waiting for ArgoCD server..."
       timeout 300 bash -c 'until kubectl get pod -n argocd -l app.kubernetes.io/name=argocd-server 2>/dev/null | grep Running; do sleep 5; done'
       
+      # Configure ArgoCD server to run in insecure mode (no TLS)
+      echo "$(date): Configuring ArgoCD for ingress access..."
+      kubectl patch deployment argocd-server -n argocd --type='json' \
+        -p='[{"op": "add", "path": "/spec/template/spec/containers/0/command/-", "value": "--insecure"}]'
+      
+      # Wait for ArgoCD server to restart
+      kubectl rollout status deployment argocd-server -n argocd
+      
       echo "$(date): K3s control plane setup complete"
       touch /root/k3s-ready.txt
       
