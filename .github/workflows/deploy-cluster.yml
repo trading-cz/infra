@@ -136,27 +136,32 @@ jobs:
       # ============================================
       - name: Verify - Servers are accessible via SSH
         run: |
-          echo "Waiting for SSH to be available..."
           CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
           KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          
+          echo "================================================"
+          echo "Waiting for SSH to be available..."
+          echo "Control Plane IP: $CONTROL_IP"
+          echo "Kafka-0 Node IP:  $KAFKA_IP"
+          echo "================================================"
           
           # Wait for control plane SSH
           for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "echo 'SSH ready'" 2>/dev/null; then
-              echo "✅ Control plane SSH accessible"
+              echo "✅ Control plane SSH accessible at $CONTROL_IP"
               break
             fi
-            echo "Attempt $i/30: Waiting for control plane SSH..."
+            echo "Attempt $i/30: Waiting for control plane SSH at $CONTROL_IP..."
             sleep 10
           done
           
           # Wait for Kafka node SSH
           for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "echo 'SSH ready'" 2>/dev/null; then
-              echo "✅ Kafka node SSH accessible"
+              echo "✅ Kafka node SSH accessible at $KAFKA_IP"
               break
             fi
-            echo "Attempt $i/30: Waiting for Kafka node SSH..."
+            echo "Attempt $i/30: Waiting for Kafka node SSH at $KAFKA_IP..."
             sleep 10
           done
 
@@ -185,10 +190,14 @@ jobs:
           # If control plane not ready, show logs
           if [ "$CONTROL_READY" = "false" ]; then
             echo "❌ Control plane cloud-init failed or timed out"
+            echo "==== Cloud-init user data ===="
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /var/lib/cloud/instance/user-data.txt" 2>/dev/null || echo "No user-data.txt found"
             echo "==== Cloud-init log ===="
             ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /root/cloud-init.log" 2>/dev/null || echo "No cloud-init.log found"
+            echo "==== Cloud-init output log ===="
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /var/log/cloud-init-output.log | tail -100" 2>/dev/null || echo "No cloud-init-output.log found"
             echo "==== Cloud-init status ===="
-            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cloud-init status" 2>/dev/null || echo "cloud-init status unavailable"
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cloud-init status --long" 2>/dev/null || echo "cloud-init status unavailable"
             echo "==== System journal (last 50 lines) ===="
             ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "journalctl -u cloud-final.service -n 50 --no-pager" 2>/dev/null || echo "Journal unavailable"
             exit 1
