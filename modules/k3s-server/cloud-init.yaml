@@ -66,11 +66,11 @@ write_files:
       
       # Configure ArgoCD server to run in insecure mode (no TLS)
       echo "$(date): Configuring ArgoCD for ingress access..."
-      kubectl patch deployment argocd-server -n argocd --type='json' \
-        -p='[{"op": "add", "path": "/spec/template/spec/containers/0/command/-", "value": "--insecure"}]'
+      kubectl set env deployment/argocd-server -n argocd ARGOCD_SERVER_INSECURE=true
       
       # Wait for ArgoCD server to restart
-      kubectl rollout status deployment argocd-server -n argocd
+      echo "$(date): Waiting for ArgoCD server rollout..."
+      kubectl rollout status deployment argocd-server -n argocd --timeout=300s
       
       echo "$(date): K3s control plane setup complete"
       touch /root/k3s-ready.txt
