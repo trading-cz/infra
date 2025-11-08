@@ -2,57 +2,42 @@
 
 # K3s agent node installation (Kafka/worker node)
 runcmd:
-  # Log start
-  - echo "$(date): Starting K3s agent node setup" >> /root/cloud-init.log
-
-  # Update system
+  - echo "$(date): Starting K3s agent node setup" | tee /root/cloud-init.log
   - apt-get update -y >> /root/cloud-init.log 2>&1
-  - apt-get install -y curl >> /root/cloud-init.log 2>&1
-
-  # Wait for control plane to be ready and get token
-  - echo "$(date): Waiting for K3s control plane at ${k3s_server_ip}:6443..." >> /root/cloud-init.log
+  - apt-get install -y curl netcat >> /root/cloud-init.log 2>&1
+  - echo "$(date): Waiting for K3s control plane at ${k3s_server_ip}:6443..." | tee -a /root/cloud-init.log
   - |
-    # Wait up to 5 minutes for control plane K3s to be ready
-    for i in $$(seq 1 60); do
+    for i in $(seq 1 60); do
       if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${k3s_server_ip}/6443" 2>/dev/null; then
-        echo "$$(date): Control plane K3s API is ready" >> /root/cloud-init.log
+        echo "$(date): Control plane K3s API is ready" | tee -a /root/cloud-init.log
         break
       fi
-      echo "$$(date): Attempt $$i/60: Waiting for control plane..." >> /root/cloud-init.log
+      echo "$(date): Attempt $i/60: Waiting for control plane..." >> /root/cloud-init.log
       sleep 5
     done
-
-  # Get token via SSH (nodes share same SSH key from Terraform)
-  - echo "$(date): Retrieving K3s node token..." >> /root/cloud-init.log
+  - echo "$(date): Retrieving K3s node token..." | tee -a /root/cloud-init.log
   - |
-    # Try to get token for up to 2 minutes
-    for i in $$(seq 1 24); do
-      K3S_TOKEN=$$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes root@${k3s_server_ip} "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null)
-      if [ -n "$$K3S_TOKEN" ]; then
-        echo "$$(date): Token retrieved successfully" >> /root/cloud-init.log
-        echo "$$K3S_TOKEN" > /tmp/k3s-token
+    for i in $(seq 1 24); do
+      K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes root@${k3s_server_ip} "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null)
+      if [ -n "$K3S_TOKEN" ]; then
+        echo "$(date): Token retrieved successfully" | tee -a /root/cloud-init.log
+        echo "$K3S_TOKEN" > /tmp/k3s-token
         break
       fi
-      echo "$$(date): Attempt $$i/24: Waiting for token..." >> /root/cloud-init.log
+      echo "$(date): Attempt $i/24: Waiting for token..." >> /root/cloud-init.log
       sleep 5
     done
-
-  # Install K3s agent and join cluster
-  - echo "$(date): Installing K3s agent..." >> /root/cloud-init.log
+  - echo "$(date): Installing K3s agent..." | tee -a /root/cloud-init.log
   - |
     if [ -f /tmp/k3s-token ]; then
-      K3S_TOKEN=$$(cat /tmp/k3s-token)
-      curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.34.1+k3s1" K3S_URL="https://${k3s_server_ip}:6443" K3S_TOKEN="$$K3S_TOKEN" sh - >> /root/cloud-init.log 2>&1
+      K3S_TOKEN=$(cat /tmp/k3s-token)
+      curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable K3S_URL="https://${k3s_server_ip}:6443" K3S_TOKEN="$K3S_TOKEN" sh - >> /root/cloud-init.log 2>&1
     else
-      echo "$$(date): ERROR: Failed to retrieve K3s token" >> /root/cloud-init.log
+      echo "$(date): ERROR: Failed to retrieve K3s token" | tee -a /root/cloud-init.log
       exit 1
     fi
-
-  # Wait for node to be ready
-  - echo "$(date): Waiting for K3s agent to be ready..." >> /root/cloud-init.log
+  - echo "$(date): Waiting for K3s agent to be ready..." | tee -a /root/cloud-init.log
   - timeout 120 bash -c 'until systemctl is-active k3s-agent 2>/dev/null; do sleep 5; done' >> /root/cloud-init.log 2>&1
-
-  # Create completion marker
-  - echo "$(date): K3s agent setup complete" >> /root/cloud-init.log
+  - echo "$(date): K3s agent setup complete" | tee -a /root/cloud-init.log
   - touch /root/k3s-agent-ready.txt
-  - echo "$(date): Cloud-init completed successfully" >> /root/cloud-init.log
+  - echo "$(date): Cloud-init completed successfully" | tee -a /root/cloud-init.log

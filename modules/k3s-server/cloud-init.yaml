@@ -2,39 +2,22 @@
 
 # K3s control plane installation with ArgoCD
 runcmd:
-  # Log start
-  - echo "$(date): Starting K3s control plane installation" >> /root/cloud-init.log
-
-  # Update system
+  - echo "$(date): Starting K3s control plane installation" | tee /root/cloud-init.log
   - apt-get update -y >> /root/cloud-init.log 2>&1
   - apt-get install -y curl >> /root/cloud-init.log 2>&1
-
-  # Install K3s server with cluster-init
-  - echo "$(date): Installing K3s server..." >> /root/cloud-init.log
-  - curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.34.1+k3s1" INSTALL_K3S_EXEC="server --cluster-init --disable traefik" sh - >> /root/cloud-init.log 2>&1
-
-  # Wait for K3s to be ready
-  - echo "$(date): Waiting for K3s to be ready..." >> /root/cloud-init.log
+  - echo "$(date): Installing K3s server..." | tee -a /root/cloud-init.log
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable INSTALL_K3S_EXEC="server --cluster-init --disable traefik" sh - >> /root/cloud-init.log 2>&1
+  - echo "$(date): Waiting for K3s to be ready..." | tee -a /root/cloud-init.log
   - timeout 300 bash -c 'until kubectl get nodes 2>/dev/null; do sleep 5; done' >> /root/cloud-init.log 2>&1
-
-  # Make kubeconfig accessible
   - chmod 644 /etc/rancher/k3s/k3s.yaml
-  - echo "$(date): K3s ready" >> /root/cloud-init.log
-
-  # Install ArgoCD
-  - echo "$(date): Installing ArgoCD..." >> /root/cloud-init.log
+  - echo "$(date): K3s ready" | tee -a /root/cloud-init.log
+  - echo "$(date): Installing ArgoCD..." | tee -a /root/cloud-init.log
   - kubectl create namespace argocd >> /root/cloud-init.log 2>&1
   - kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml >> /root/cloud-init.log 2>&1
-
-  # Wait for ArgoCD server to be ready
-  - echo "$(date): Waiting for ArgoCD server..." >> /root/cloud-init.log
+  - echo "$(date): Waiting for ArgoCD server..." | tee -a /root/cloud-init.log
   - timeout 300 bash -c 'until kubectl get pod -n argocd -l app.kubernetes.io/name=argocd-server 2>/dev/null | grep Running; do sleep 5; done' >> /root/cloud-init.log 2>&1
-
-  # Create completion marker
-  - echo "$(date): K3s control plane setup complete" >> /root/cloud-init.log
+  - echo "$(date): K3s control plane setup complete" | tee -a /root/cloud-init.log
   - touch /root/k3s-ready.txt
-
-  # Final status
-  - echo "$(date): Cloud-init completed successfully" >> /root/cloud-init.log
   - kubectl get nodes >> /root/cloud-init.log 2>&1
   - kubectl get pods -A >> /root/cloud-init.log 2>&1
+  - echo "$(date): Cloud-init completed successfully" | tee -a /root/cloud-init.log
