@@ -14,11 +14,22 @@ on:
         required: true
         default: "list"
         type: choice
-        options: [list, destroy-cluster, destroy-all, diagnose-argocd]
+        options: [list, destroy-cluster, destroy-all]
+  schedule:
+    # TEST: Runs at 21:15 UTC (22:15 CET) daily
+    - cron: '15 21 * * *'
+    # Runs at 22:00 UTC (23:00 CET) daily
+    - cron: '0 22 * * *'
+    # Runs at 01:00 UTC (02:00 CET) daily
+    - cron: '0 1 * * *'
 
 jobs:
   hcloud:
     runs-on: ubuntu-latest
+    env:
+      # Default to 'dev' and 'destroy-cluster' for scheduled runs
+      TARGET_ENV: ${{ inputs.env || 'dev' }}
+      TARGET_ACTION: ${{ inputs.action || 'destroy-cluster' }}
 
     steps:
       - name: Install hcloud CLI
@@ -30,11 +41,12 @@ jobs:
 
       # ---------- LIST ----------
       - name: List all resources by env
+        if: ${{ env.TARGET_ACTION == 'list' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          ENV="${{ inputs.env }}"
+          ENV="${{ env.TARGET_ENV }}"
 
           echo "========================================="
           echo "  Hetzner Cloud Resources: ${ENV}"
@@ -80,12 +92,12 @@ jobs:
       
       # ---------- DESTROY CLUSTER (keep Primary IPs) ----------
       - name: Destroy cluster (keep Primary IPs for reuse)
-        if: ${{ inputs.action == 'destroy-cluster' }}
+        if: ${{ env.TARGET_ACTION == 'destroy-cluster' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          ENV="${{ inputs.env }}"
+          ENV="${{ env.TARGET_ENV }}"
 
           echo "========================================="
           echo "  Destroying Cluster (Keeping Primary IPs)"
@@ -195,12 +207,12 @@ jobs:
       
       # ---------- DESTROY ALL (including Primary IPs) ----------
       - name: Destroy ALL resources (including Primary IPs)
-        if: ${{ inputs.action == 'destroy-all' }}
+        if: ${{ env.TARGET_ACTION == 'destroy-all' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          ENV="${{ inputs.env }}"
+          ENV="${{ env.TARGET_ENV }}"
 
           echo "========================================="
           echo "  ⚠️  DESTROYING ALL RESOURCES  ⚠️"
@@ -342,119 +354,3 @@ jobs:
           echo "Destroyed: Everything (VMs, Networks, Firewalls, SSH Keys, Volumes, Load Balancers, Primary IPs)"
           echo "Next deployment will create new Primary IPs with random IPs"
           echo "⚠️  Remember to update DNS with new IPs after next deployment"
-
-      # ---------- DIAGNOSE ARGOCD ----------
-      - name: Diagnose ArgoCD
-        if: ${{ inputs.action == 'diagnose-argocd' }}
-        env:
-          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-        run: |
-          set -euo pipefail
-          ENV="${{ inputs.env }}"
-          
-          echo "========================================="
-          echo "  ArgoCD Diagnostics"
-          echo "========================================="
-          echo
-          
-          # Find control plane server
-          echo "🔍 Finding control plane server..."
-          CONTROL_SERVER_ID=$(hcloud server list -l environment="$ENV" -l role=control-plane -o noheader -o columns=id | head -1)
-          
-          if [ -z "$CONTROL_SERVER_ID" ]; then
-            echo "❌ No control plane server found for environment: $ENV"
-            exit 1
-          fi
-          
-          CONTROL_IP=$(hcloud server describe "$CONTROL_SERVER_ID" -o format='{{.PublicNet.IPv4.IP}}')
-          echo "✅ Control plane: $CONTROL_IP"
-          echo
-          
-          # Get SSH key
-          echo "🔑 Setting up SSH..."
-          SSH_KEY_ID=$(hcloud ssh-key list -l environment="$ENV" -o noheader -o columns=id | head -1)
-          
-          if [ -z "$SSH_KEY_ID" ]; then
-            echo "❌ No SSH key found"
-            exit 1
-          fi
-          
-          # Create SSH key file
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/ssh_key
-          chmod 600 /tmp/ssh_key
-          
-          # Wait for SSH
-          echo "⏳ Waiting for SSH connection..."
-          for i in {1..30}; do
-            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ssh_key root@$CONTROL_IP "echo SSH OK" 2>/dev/null; then
-              echo "✅ SSH connection established"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "❌ SSH connection timeout"
-              exit 1
-            fi
-            sleep 2
-          done
-          echo
-          
-          # Run diagnostics
-          echo "========================================="
-          echo "  Kubernetes & ArgoCD Status"
-          echo "========================================="
-          echo
-          
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ssh_key root@$CONTROL_IP << 'EOF'
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-            
-            echo "== ArgoCD Pods =="
-            kubectl get pods -n argocd -o wide
-            echo
-            
-            echo "== ArgoCD Services =="
-            kubectl get svc -n argocd
-            echo
-            
-            echo "== ArgoCD Ingress =="
-            kubectl get ingress -n argocd -o wide
-            echo
-            
-            echo "== ArgoCD Server Logs (last 50 lines) =="
-            kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server --tail=50
-            echo
-            
-            echo "== ArgoCD Application Controller Logs (last 30 lines) =="
-            kubectl logs -n argocd -l app.kubernetes.io/name=argocd-application-controller --tail=30
-            echo
-            
-            echo "== ArgoCD Applications =="
-            kubectl get applications -n argocd
-            echo
-            
-            echo "== ArgoCD ConfigMaps =="
-            kubectl get configmap -n argocd argocd-cm -o yaml
-            echo
-            
-            echo "== ArgoCD RBAC ConfigMap =="
-            kubectl get configmap -n argocd argocd-rbac-cm -o yaml
-            echo
-            
-            echo "== Check ArgoCD Server Health =="
-            kubectl exec -n argocd deployment/argocd-server -- argocd admin settings rbac can admin applications list '*' || echo "RBAC check failed"
-            echo
-            
-            echo "== Traefik Logs (last 30 lines) =="
-            kubectl logs -n kube-system -l app.kubernetes.io/name=traefik --tail=30
-            echo
-            
-            echo "== All Ingresses in Cluster =="
-            kubectl get ingress --all-namespaces
-            
-          EOF
-          
-          echo
-          echo "========================================="
-          echo "✅ Diagnostics Complete"
-          echo "========================================="
-          echo "ArgoCD UI: https://$CONTROL_IP"
-          echo "If you see 'Internal Server Error', check the logs above"
