@@ -1,0 +1,36 @@
+name: Manual Cleanup (One-time)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment (dev/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install hcloud CLI
+        run: |
+          wget -q https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz
+          tar -xzf hcloud-linux-amd64.tar.gz
+          sudo mv hcloud /usr/local/bin/
+          hcloud version
+
+      - name: Cleanup unlabeled resources
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          chmod +x cleanup-unlabeled-resources.sh
+          ./cleanup-unlabeled-resources.sh ${{ inputs.environment }}

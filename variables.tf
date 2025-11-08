@@ -1,11 +1,40 @@
+# ============================================
+# Required Variables (GitHub Actions sets via TF_VAR_*)
+# ============================================
+# Set in GitHub Actions secrets:
+#   TF_VAR_hcloud_token = ${{ secrets.HCLOUD_TOKEN }}
+#   TF_VAR_ssh_public_key = ${{ secrets.SSH_PUBLIC_KEY }}
+
 variable "hcloud_token" {
-  description = "Hetzner Cloud API Token"
+  description = "Hetzner Cloud API token (set via TF_VAR_hcloud_token)"
   type        = string
   sensitive   = true
 }
 
+variable "ssh_public_key" {
+  description = "SSH public key for server access (set via TF_VAR_ssh_public_key)"
+  type        = string
+}
+
+# Primary IP IDs (created in GitHub Actions, passed to Terraform)
+variable "control_plane_primary_ip_id" {
+  description = "Primary IP ID for control plane (created by GitHub Actions)"
+  type        = string
+  default     = ""
+}
+
+variable "kafka_primary_ip_id" {
+  description = "Primary IP ID for kafka-0 external access (created by GitHub Actions)"
+  type        = string
+  default     = ""
+}
+
+# ============================================
+# Environment Configuration
+# ============================================
+
 variable "environment" {
-  description = "Environment name (dev or prod)"
+  description = "Environment name (dev/prod)"
   type        = string
   validation {
     condition     = contains(["dev", "prod"], var.environment)
@@ -19,95 +48,89 @@ variable "cluster_name" {
   default     = "k3s-trading"
 }
 
-variable "ssh_public_key" {
-  description = "SSH public key for server access"
+# ============================================
+# Infrastructure Settings
+# ============================================
+
+variable "location" {
+  description = "Hetzner location (nbg1, fsn1, hel1)"
   type        = string
+  default     = "nbg1"
 }
 
-# Server configurations
-variable "control_plane_server_type" {
-  description = "Hetzner server type for control plane"
+# Note: datacenter is for Primary IPs (persistent IPs)
+# Will be used when we add Primary IP resources to main.tf
+# Example: nbg1-dc3, fsn1-dc14, hel1-dc2
+variable "datacenter" {
+  description = "Hetzner datacenter (required for Primary IPs, e.g., nbg1-dc3)"
   type        = string
-  default     = "cax21" # 4 vCPU, 8GB RAM, ARM64
+  default     = "nbg1-dc3"
+}
+
+# ============================================
+# Server Types (differ by environment)
+# ============================================
+
+variable "control_plane_server_type" {
+  description = "Server type for K3s control plane"
+  type        = string
+  default     = "cx22"
 }
 
 variable "kafka_server_type" {
-  description = "Hetzner server type for Kafka nodes"
+  description = "Server type for Kafka nodes"
   type        = string
-  default     = "cx23" # 2 vCPU, 4GB RAM, x86_64 (consider cax21 ARM for upgrade)
+  default     = "cx22"
 }
 
 variable "kafka_node_count" {
-  description = "Number of Kafka nodes (must be odd for KRaft quorum)"
+  description = "Number of Kafka nodes (minimum 3 for KRaft quorum in production)"
   type        = number
-  default     = 3
+  default     = 1
   validation {
-    condition     = var.kafka_node_count % 2 == 1 && var.kafka_node_count >= 3
-    error_message = "Kafka node count must be odd and at least 3 for quorum."
+    condition     = var.kafka_node_count >= 1
+    error_message = "Must have at least 1 Kafka node."
   }
 }
 
-variable "app_server_type" {
-  description = "Hetzner server type for application worker nodes"
-  type        = string
-  default     = "cx23" # 2 vCPU, 4GB RAM, x86_64 - cheapest available
-}
+# ============================================
+# Network Configuration
+# ============================================
 
-variable "app_node_count" {
-  description = "Number of application worker nodes for Python apps"
-  type        = number
-  default     = 0
-}
-
-# Network configuration
-variable "network_zone" {
-  description = "Network zone for private network"
-  type        = string
-  default     = "eu-central"
-}
-
-variable "network_ip_range" {
-  description = "IP range for private network"
+variable "network_cidr" {
+  description = "CIDR block for the private network"
   type        = string
   default     = "10.0.0.0/16"
 }
 
-variable "subnet_ip_range" {
-  description = "IP range for subnet"
+variable "subnet_cidr" {
+  description = "CIDR block for the subnet"
   type        = string
   default     = "10.0.1.0/24"
 }
 
-# Location configuration
-variable "location" {
-  description = "Default location for servers"
+variable "control_plane_private_ip" {
+  description = "Private IP for K3s control plane"
   type        = string
-  default     = "nbg1" # Nuremberg
+  default     = "10.0.1.10"
 }
 
-variable "datacenter" {
-  description = "Datacenter for Primary IPs (must match server location)"
-  type        = string
-  default     = "nbg1-dc3" # Nuremberg datacenter 3
-}
+# ============================================
+# K3s Configuration
+# ============================================
 
-# K3s configuration
 variable "k3s_version" {
-  description = "K3s version to install"
+  description = "K3s version to install (e.g., v1.34.1+k3s1 from stable channel)"
   type        = string
-  default     = "v1.30.5+k3s1"
+  default     = "v1.34.1+k3s1"
 }
 
-variable "k3s_token" {
-  description = "K3s cluster token for node joining"
-  type        = string
-  sensitive   = true
-  default     = "" # Will be generated if empty
-}
+# ============================================
+# Kafka Configuration
+# ============================================
 
-# ArgoCD configuration
-variable "config_repo_url" {
-  description = "URL to the config repository for ArgoCD"
+variable "kafka_version" {
+  description = "Kafka/Strimzi version"
   type        = string
-  default     = "https://github.com/trading-cz/config.git"
+  default     = "4.0.0"
 }

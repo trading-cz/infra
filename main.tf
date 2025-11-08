@@ -1,159 +1,88 @@
+# K3s Trading Infrastructure - Root Module
+# Single source of truth for both dev and prod environments
+# Use: terraform apply -var-file="environments/dev.tfvars"
+# GitHub Actions: Set TF_VAR_hcloud_token, TF_VAR_ssh_public_key env vars
+
 provider "hcloud" {
   token = var.hcloud_token
 }
 
-# Generate K3s token if not provided
-resource "random_password" "k3s_token" {
-  length  = 32
-  special = false
-}
-
-locals {
-  k3s_token = var.k3s_token != "" ? var.k3s_token : random_password.k3s_token.result
-}
-
-module "k3s" {
-  source                      = "./modules/k3s"
-  environment                 = var.environment
-  cluster_name                = var.cluster_name
-  k3s_version                 = var.k3s_version
-  k3s_token                   = local.k3s_token
-  control_plane_name          = "${var.cluster_name}-${var.environment}-control"
-  control_plane_server_type   = var.control_plane_server_type
-  control_plane_ip            = "10.0.1.10"
-  control_plane_primary_ip_id = module.network.control_plane_primary_ip_id # Attach Primary IP #1
-  control_plane_user_data = templatefile("${path.module}/templates/control-plane-init.sh", {
-    k3s_version  = var.k3s_version
-    k3s_token    = local.k3s_token
-    node_ip      = "10.0.1.10"
-    environment  = var.environment
-    cluster_name = var.cluster_name
-    public_ip    = module.network.control_plane_primary_ip_address # Pass public IP for TLS cert
-    argocd_parent_app = templatefile("${path.module}/argocd/parent-app-bootstrap.yaml.tpl", {
-      environment     = var.environment
-      config_repo_url = var.config_repo_url
-      target_revision = var.environment == "dev" ? "main" : "production"
-    })
-  })
-  network_id        = module.network.network_id
-  firewall_id       = module.network.firewall_id
-  ssh_key_id        = module.compute.ssh_key_id
-  location          = var.location
-  kafka_node_count  = var.kafka_node_count
-  kafka_server_type = var.kafka_server_type
-  app_node_count    = var.app_node_count
-  app_server_type   = var.app_server_type
+# SSH Key for all servers
+resource "hcloud_ssh_key" "main" {
+  name       = "${var.environment}-${var.cluster_name}-ssh-key"
+  public_key = var.ssh_public_key
+  
   labels = {
     environment = var.environment
-    managed_by  = "terraform"
     cluster     = var.cluster_name
   }
 }
 
+# ============================================
+# Primary IPs - Managed by GitHub Actions
+# ============================================
+# Primary IPs are created in GitHub Actions workflow BEFORE Terraform runs
+# Terraform only receives the IP IDs as variables and assigns them to servers
+# This avoids chicken-egg problems with IP assignment during server creation
 
+# Network Module - Private VPC
 module "network" {
-  source           = "./modules/network"
-  network_name     = "${var.cluster_name}-${var.environment}-network"
-  network_ip_range = var.network_ip_range
-  network_zone     = var.network_zone
-  subnet_ip_range  = var.subnet_ip_range
-  firewall_name    = "${var.cluster_name}-${var.environment}-firewall"
-  datacenter       = var.datacenter # Required for Primary IPs
-  firewall_rules = [
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "22"
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow SSH"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "6443"
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow Kubernetes API (external)"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "6443"
-      source_ips  = ["10.0.1.0/24"]
-      description = "Allow Kubernetes API (internal network)"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "10250"
-      source_ips  = ["10.0.1.0/24"]
-      description = "Allow Kubelet (internal nodes)"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "2379-2380"
-      source_ips  = ["10.0.1.0/24"]
-      description = "Allow etcd (internal)"
-    },
-    {
-      direction   = "in"
-      protocol    = "udp"
-      port        = "8472"
-      source_ips  = ["10.0.1.0/24"]
-      description = "Allow Flannel VXLAN (K3s CNI)"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "80"
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow HTTP"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "443"
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow HTTPS"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "9092-9094"
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow Kafka"
-    },
-    {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "30000-32767"
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow NodePort range"
-    },
-    {
-      direction   = "in"
-      protocol    = "icmp"
-      port        = null
-      source_ips  = ["0.0.0.0/0"]
-      description = "Allow ICMP"
-    }
-  ]
-  common_labels = {
+  source = "./modules/network"
+
+  network_name  = "${var.environment}-${var.cluster_name}-net"
+  network_cidr  = var.network_cidr
+  subnet_cidr   = var.subnet_cidr
+  firewall_name = "${var.environment}-${var.cluster_name}-fw"
+  
+  labels = {
     environment = var.environment
-    managed_by  = "terraform"
     cluster     = var.cluster_name
   }
 }
 
+# K3s Control Plane Server
+# Primary IP assigned during creation (no reboot needed)
+module "k3s_control" {
+  source = "./modules/k3s-server"
 
-module "compute" {
-  source         = "./modules/compute"
-  ssh_key_name   = "${var.cluster_name}-${var.environment}"
-  ssh_public_key = var.ssh_public_key
-  common_labels = {
+  server_name     = "${var.environment}-${var.cluster_name}-control"
+  server_type     = var.control_plane_server_type
+  location        = var.location
+  ssh_key_ids     = [hcloud_ssh_key.main.id]
+  network_id      = module.network.network_id
+  subnet_id       = module.network.subnet_id
+  firewall_ids    = [module.network.firewall_id]
+  private_ip      = var.control_plane_private_ip
+  primary_ipv4_id = var.control_plane_primary_ip_id != "" ? var.control_plane_primary_ip_id : null
+
+  labels = {
     environment = var.environment
-    managed_by  = "terraform"
     cluster     = var.cluster_name
+    role        = "control-plane"
   }
 }
 
+# Kafka Server(s)
+# Only kafka-0 gets Primary IP for external access
+module "kafka_server" {
+  source = "./modules/kafka-server"
+  count  = var.kafka_node_count
+
+  server_name     = "${var.environment}-${var.cluster_name}-kafka-${count.index}"
+  server_type     = var.kafka_server_type
+  location        = var.location
+  ssh_key_ids     = [hcloud_ssh_key.main.id]
+  network_id      = module.network.network_id
+  subnet_id       = module.network.subnet_id
+  firewall_ids    = [module.network.firewall_id]
+  private_ip      = cidrhost(var.subnet_cidr, 20 + count.index) # 10.0.1.20, 10.0.1.21, etc.
+  primary_ipv4_id = count.index == 0 && var.kafka_primary_ip_id != "" ? var.kafka_primary_ip_id : null
+  k3s_server_ip   = var.control_plane_private_ip # Control plane private IP for K3s agent join
+
+  labels = {
+    environment = var.environment
+    cluster     = var.cluster_name
+    role        = "kafka"
+    kafka_id    = tostring(count.index)
+  }
+}

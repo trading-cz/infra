@@ -1,3 +1,6 @@
+# Terraform and Provider Version Requirements
+# Centralized version management for the root module
+
 terraform {
   required_version = ">= 1.13"
 
@@ -6,13 +9,9 @@ terraform {
       source  = "hetznercloud/hcloud"
       version = "~> 1.54"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.7"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
-    }
+  }
+
+  backend "local" {
+    path = "terraform.tfstate"
   }
 }

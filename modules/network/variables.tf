@@ -1,21 +1,18 @@
 variable "network_name" {
-  description = "Name of the VPC network"
+  description = "Name of the Hetzner network"
   type        = string
 }
 
-variable "network_ip_range" {
-  description = "IP range for the VPC (CIDR)"
+variable "network_cidr" {
+  description = "CIDR block for the network"
   type        = string
+  default     = "10.0.0.0/16"
 }
 
-variable "network_zone" {
-  description = "Network zone (e.g., eu-central)"
+variable "subnet_cidr" {
+  description = "CIDR block for the subnet"
   type        = string
-}
-
-variable "subnet_ip_range" {
-  description = "IP range for the subnet (CIDR)"
-  type        = string
+  default     = "10.0.1.0/24"
 }
 
 variable "firewall_name" {
@@ -23,17 +20,8 @@ variable "firewall_name" {
   type        = string
 }
 
-variable "firewall_rules" {
-  description = "List of firewall rules"
-  type        = list(any)
-}
-
-variable "common_labels" {
-  description = "Common labels for all resources"
+variable "labels" {
+  description = "Labels to apply to network resources"
   type        = map(string)
-}
-
-variable "datacenter" {
-  description = "Datacenter for Primary IPs (must match server location)"
-  type        = string
+  default     = {}
 }

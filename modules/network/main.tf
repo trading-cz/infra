@@ -1,60 +1,53 @@
-// Network module for Hetzner Cloud
+# Network module for Hetzner Cloud infrastructure
+# Creates VPC, subnet, and firewall rules
 
-resource "hcloud_network" "private" {
-  name     = var.network_name
-  ip_range = var.network_ip_range
-  labels   = var.common_labels
-}
-
-resource "hcloud_network_subnet" "private" {
-  network_id   = hcloud_network.private.id
-  type         = "cloud"
-  network_zone = var.network_zone
-  ip_range     = var.subnet_ip_range
-}
-
-resource "hcloud_firewall" "k3s" {
-  name   = var.firewall_name
-  labels = var.common_labels
-
-  dynamic "rule" {
-    for_each = var.firewall_rules
-    content {
-      direction   = rule.value.direction
-      protocol    = rule.value.protocol
-      port        = rule.value.port
-      source_ips  = rule.value.source_ips
-      description = rule.value.description
+terraform {
+  required_providers {
+    hcloud = {
+      source = "hetznercloud/hcloud"
     }
   }
 }
 
-# Primary IP for control plane (ArgoCD, K3s API, Python apps)
-resource "hcloud_primary_ip" "control_plane" {
-  name          = "${var.network_name}-control-ip"
-  type          = "ipv4"
-  assignee_type = "server"
-  auto_delete   = false # Persist after server deletion
-  datacenter    = var.datacenter
-  labels        = merge(var.common_labels, { purpose = "control-plane-argocd" })
-
-  lifecycle {
-    prevent_destroy = true
-    ignore_changes  = [assignee_id]
-  }
+resource "hcloud_network" "main" {
+  name     = var.network_name
+  ip_range = var.network_cidr
+  
+  labels = var.labels
 }
 
-# Primary IP for kafka-0 (external Kafka access)
-resource "hcloud_primary_ip" "kafka_external" {
-  name          = "${var.network_name}-kafka-ip"
-  type          = "ipv4"
-  assignee_type = "server"
-  auto_delete   = false # Persist after server deletion
-  datacenter    = var.datacenter
-  labels        = merge(var.common_labels, { purpose = "kafka-external" })
+resource "hcloud_network_subnet" "subnet" {
+  network_id   = hcloud_network.main.id
+  type         = "cloud"
+  network_zone = "eu-central" # Hardcoded: all Hetzner locations (nbg1, fsn1, hel1) are in eu-central zone
+  ip_range     = var.subnet_cidr
+}
 
-  lifecycle {
-    prevent_destroy = true
-    ignore_changes  = [assignee_id]
+resource "hcloud_firewall" "main" {
+  name   = var.firewall_name
+  labels = var.labels
+
+  # SSH access
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # Kubernetes API access
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "6443"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # HTTPS access
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "443"
+    source_ips = ["0.0.0.0/0", "::/0"]
   }
 }

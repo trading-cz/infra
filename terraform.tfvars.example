@@ -1,7 +1,0 @@
-# Terraform State and Secrets
-# These values will be provided via GitHub Secrets
-
-# hcloud_token     = "your-hetzner-token"      # From GitHub Secret: HCLOUD_TOKEN
-# ssh_public_key   = "ssh-ed25519 AAAA..."     # From GitHub Secret: SSH_PUBLIC_KEY  
-# ssh_private_key  = "-----BEGIN OPENSSH..."   # From GitHub Secret: SSH_PRIVATE_KEY
-# k3s_token        = ""                        # Auto-generated if empty
