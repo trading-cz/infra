@@ -15,10 +15,21 @@ on:
         default: "list"
         type: choice
         options: [list, destroy-cluster, destroy-all]
+  schedule:
+    # TEST: Runs at 21:15 UTC (22:15 CET) daily
+    - cron: '15 21 * * *'
+    # Runs at 22:00 UTC (23:00 CET) daily
+    - cron: '0 22 * * *'
+    # Runs at 01:00 UTC (02:00 CET) daily
+    - cron: '0 1 * * *'
 
 jobs:
   hcloud:
     runs-on: ubuntu-latest
+    env:
+      # Default to 'dev' and 'destroy-cluster' for scheduled runs
+      TARGET_ENV: ${{ inputs.env || 'dev' }}
+      TARGET_ACTION: ${{ inputs.action || 'destroy-cluster' }}
 
     steps:
       - name: Install hcloud CLI
@@ -30,11 +41,12 @@ jobs:
 
       # ---------- LIST ----------
       - name: List all resources by env
+        if: ${{ env.TARGET_ACTION == 'list' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          ENV="${{ inputs.env }}"
+          ENV="${{ env.TARGET_ENV }}"
 
           echo "========================================="
           echo "  Hetzner Cloud Resources: ${ENV}"
@@ -80,12 +92,12 @@ jobs:
       
       # ---------- DESTROY CLUSTER (keep Primary IPs) ----------
       - name: Destroy cluster (keep Primary IPs for reuse)
-        if: ${{ inputs.action == 'destroy-cluster' }}
+        if: ${{ env.TARGET_ACTION == 'destroy-cluster' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          ENV="${{ inputs.env }}"
+          ENV="${{ env.TARGET_ENV }}"
 
           echo "========================================="
           echo "  Destroying Cluster (Keeping Primary IPs)"
@@ -195,12 +207,12 @@ jobs:
       
       # ---------- DESTROY ALL (including Primary IPs) ----------
       - name: Destroy ALL resources (including Primary IPs)
-        if: ${{ inputs.action == 'destroy-all' }}
+        if: ${{ env.TARGET_ACTION == 'destroy-all' }}
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
           set -euo pipefail
-          ENV="${{ inputs.env }}"
+          ENV="${{ env.TARGET_ENV }}"
 
           echo "========================================="
           echo "  ⚠️  DESTROYING ALL RESOURCES  ⚠️"
