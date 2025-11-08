@@ -305,19 +305,44 @@ jobs:
           fi
           
           echo ""
-          echo "Waiting for ArgoCD pods..."
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/part-of=argocd -n argocd --timeout=300s || true
+          echo "Waiting for ArgoCD pods to be ready..."
+          # Wait for pods to exist first
+          for i in {1..60}; do
+            POD_COUNT=$(kubectl get pods -n argocd --no-headers 2>/dev/null | wc -l)
+            if [ "$POD_COUNT" -ge 3 ]; then
+              echo "Found $POD_COUNT ArgoCD pods, waiting for ready state..."
+              break
+            fi
+            echo "Waiting for ArgoCD pods to be created... ($i/60)"
+            sleep 2
+          done
+          
+          # Check if pods were created
+          POD_COUNT=$(kubectl get pods -n argocd --no-headers 2>/dev/null | wc -l)
+          if [ "$POD_COUNT" -lt 3 ]; then
+            echo "❌ ArgoCD pods not created after 2 minutes"
+            kubectl get pods -n argocd
+            exit 1
+          fi
+          
+          # Now wait for pods to be ready (5 minute timeout)
+          if ! kubectl wait --for=condition=ready pod -l app.kubernetes.io/part-of=argocd -n argocd --timeout=300s; then
+            echo "❌ ArgoCD pods not ready after 5 minutes"
+            echo ""
+            echo "Current pod status:"
+            kubectl get pods -n argocd
+            echo ""
+            echo "Pod details:"
+            kubectl describe pods -n argocd
+            exit 1
+          fi
           
           echo ""
           echo "ArgoCD pod status:"
           kubectl get pods -n argocd
           
           ARGOCD_READY=$(kubectl get pods -n argocd --no-headers | grep Running | wc -l)
-          if [ "$ARGOCD_READY" -ge 3 ]; then
-            echo "✅ ArgoCD is running ($ARGOCD_READY pods)"
-          else
-            echo "⚠️  ArgoCD has $ARGOCD_READY running pods (may still be starting)"
-          fi
+          echo "✅ ArgoCD is running ($ARGOCD_READY pods ready)"
 
       # ============================================
       # Verify 6: Traefik ingress is running
@@ -326,9 +351,23 @@ jobs:
         run: |
           export KUBECONFIG=$PWD/kubeconfig.yaml
           
-          echo "Checking Traefik..."
-          if kubectl get namespace traefik 2>/dev/null; then
-            echo "✅ Traefik namespace exists"
+          echo "Checking Traefik (K3s built-in)..."
+          
+          # Check for Traefik in kube-system namespace (K3s default)
+          if kubectl get deployment traefik -n kube-system 2>/dev/null; then
+            echo "✅ Traefik deployment found in kube-system"
+            
+            TRAEFIK_READY=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik --no-headers | grep Running | wc -l)
+            if [ "$TRAEFIK_READY" -ge 1 ]; then
+              echo "✅ Traefik is running ($TRAEFIK_READY pods)"
+              kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
+            else
+              echo "⚠️  Traefik pods not running yet"
+              kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik
+            fi
+          # Check for standalone Traefik namespace installation
+          elif kubectl get namespace traefik 2>/dev/null; then
+            echo "✅ Traefik namespace exists (standalone installation)"
             kubectl get pods -n traefik
             
             TRAEFIK_READY=$(kubectl get pods -n traefik --no-headers | grep Running | wc -l)
@@ -336,7 +375,7 @@ jobs:
               echo "✅ Traefik is running ($TRAEFIK_READY pods)"
             fi
           else
-            echo "⚠️  Traefik namespace not found (may be installed as K3s built-in)"
+            echo "⚠️  Traefik not found (check if K3s was installed with --disable traefik)"
           fi
 
       # ============================================
