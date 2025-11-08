@@ -63,9 +63,51 @@ ssh root@<control-plane-ip>
 - Apply parent-app.yaml from this module
 ```
 
+## Custom Admin Password
+
+Set a custom admin password instead of using the auto-generated one:
+
+### Via GitHub Secret (Automatic)
+1. Go to GitHub repository settings → Secrets
+2. Add secret: `ARGOCD_ADMIN_PASSWORD` = `YourSecurePassword123`
+3. Deploy cluster - password will be set automatically
+
+### Manual Setup (After Deployment)
+```powershell
+# Windows
+.\set-argocd-password.ps1 -Password "YourSecurePassword123"
+
+# Linux/Mac
+./set-argocd-password.sh "YourSecurePassword123"
+```
+
+## Accessing ArgoCD UI
+
+### Direct Access (via Ingress)
+The workflow automatically deploys an Traefik ingress for ArgoCD:
+
+```
+URL: https://<control-plane-ip>
+Username: admin
+Password: (from ARGOCD_ADMIN_PASSWORD secret or argocd-initial-admin-secret)
+```
+
+⚠️ **Accept self-signed certificate warning in your browser**
+
+### Via Port-Forward (Alternative)
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+# Access: https://localhost:8080
+```
+
 ## Security Considerations
 
 **DO NOT commit `repository-secret.yaml`** (contains GitHub token)
 - Use `.gitignore` to exclude it
 - Use Sealed Secrets or External Secrets Operator for production
 - For dev: can use GitHub Deploy Keys (read-only, repo-specific)
+
+**Admin Password:**
+- Store in GitHub Secrets (`ARGOCD_ADMIN_PASSWORD`)
+- Change default password after first deployment
+- Use SSO for production environments

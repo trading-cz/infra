@@ -4,18 +4,32 @@ Ephemeral K3s clusters on Hetzner Cloud with persistent Primary IPs for algorith
 
 ## � Core Concept
 
-**Deploy clusters only during trading hours → Massive cost savings (58%)**
+**Deploy clusters only during trading hours → Cost savings reasons **
 
 - **Ephemeral VMs**: Created on-demand, destroyed after hours
 - **Persistent IPs**: Remain assigned (€1/month total), maintain stable DNS
 - **Automated Deployment**: GitHub Actions orchestrates everything
 - **K3s + Kafka**: Streaming pipeline for market data → trading strategies
 
-**Cost Comparison:**
-- Dev: €12.90/month (8h/day) vs €28.80 (24/7) = **55% savings**
-- Prod: €48.60/month (10h/day) vs €114.40 (24/7) = **58% savings**
-
 ## 🏗️ Architecture
+Two repositories work together:
+1. **Infrastructure (this repo: infra)**: Terraform code to create Hetzner resources
+2. **Applications (separate repo: config)**: Apps config + Strimzi Kafka definitions deployed via ArgoCD
+
+** Clear Separation of Concerns**
+Infra Repository (Infrastructure) 
+- Provisions K3s cluster (Terraform)
+- Installs ArgoCD (cloud-init)
+- Configures ArgoCD (bootstrap - connects to config repo)
+- Installs Strimzi operator
+- One-time setup per environment
+
+Config Repository (Applications)
+- Kafka cluster definitions
+- Application deployments (ingestion, strategies)
+- Kafka topics, users
+- Continuous deployments (every change triggers sync)
+
 
 ### Infrastructure Components
 
