@@ -1,0 +1,137 @@
+# Kafka Cluster - Production Environment
+# 3 brokers (KRaft quorum), higher resources, persistent storage option
+
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: trading-cluster
+  namespace: kafka
+spec:
+  # ============================================
+  # Kafka Broker Configuration (KRaft mode)
+  # ============================================
+  kafka:
+    version: 4.1.0
+    replicas: 3  # KRaft quorum requires 3+ brokers (2/3 consensus)
+    
+    # Node selector - deploy on kafka worker nodes
+    template:
+      pod:
+        metadata:
+          labels:
+            app: kafka
+            environment: prod
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: workload
+                      operator: In
+                      values:
+                        - kafka
+          
+          # Anti-affinity: spread brokers across different nodes
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: kafka
+                  topologyKey: kubernetes.io/hostname
+    
+    # Listeners (internal + external access)
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      
+      - name: external
+        port: 9094
+        type: nodeport
+        tls: false
+        configuration:
+          bootstrap:
+            nodePort: 33333  # External access via Primary IP #2
+    
+    # Resource limits (higher for production)
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 1000m
+      limits:
+        memory: 4Gi
+        cpu: 2000m
+    
+    # Storage (ephemeral even in prod - cluster is ephemeral)
+    # For persistent storage, use:
+    # storage:
+    #   type: persistent-claim
+    #   size: 100Gi
+    #   class: hcloud-volumes
+    storage:
+      type: ephemeral
+    
+    # Kafka configuration
+    config:
+      # Replication settings (3 brokers = 3x replication)
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      
+      # Log retention (7 days for production)
+      log.retention.hours: 168
+      log.segment.bytes: 1073741824  # 1GB segments
+      
+      # Performance tuning (higher for production)
+      num.network.threads: 8
+      num.io.threads: 16
+      socket.send.buffer.bytes: 102400
+      socket.receive.buffer.bytes: 102400
+      socket.request.max.bytes: 104857600
+      
+      # Compression
+      compression.type: producer
+      
+      # Producer settings
+      max.request.size: 1048576
+  
+  # ============================================
+  # Entity Operator (Topic & User Management)
+  # ============================================
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 200m
+        limits:
+          memory: 512Mi
+          cpu: 500m
+    
+    userOperator:
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 200m
+        limits:
+          memory: 512Mi
+          cpu: 500m
+  
+  # ============================================
+  # Kafka Exporter (Prometheus Metrics)
+  # ============================================
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 100m
+      limits:
+        memory: 256Mi
+        cpu: 200m

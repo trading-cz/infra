@@ -408,6 +408,126 @@ jobs:
           echo "✅ All critical ports are accessible"
 
       # ============================================
+      # SERVICES INSTALLATION SECTION
+      # ============================================
+      # After infrastructure is ready, install and verify application services
+      # Services: Strimzi Kafka Operator, (future: Prometheus, Grafana)
+      
+      # ============================================
+      # Verify 8: Strimzi Kafka Operator is installed
+      # ============================================
+      - name: Verify - Strimzi Kafka Operator is installed
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "Checking Strimzi operator namespace..."
+          if kubectl get namespace kafka 2>/dev/null; then
+            echo "✅ Kafka namespace exists"
+          else
+            echo "❌ Kafka namespace not found"
+            exit 1
+          fi
+          
+          echo ""
+          echo "Checking Strimzi operator deployment..."
+          if kubectl get deployment strimzi-cluster-operator -n kafka 2>/dev/null; then
+            echo "✅ Strimzi operator deployment exists"
+          else
+            echo "❌ Strimzi operator deployment not found"
+            exit 1
+          fi
+          
+          echo ""
+          echo "Waiting for Strimzi operator to be ready..."
+          if ! kubectl wait --for=condition=available deployment/strimzi-cluster-operator -n kafka --timeout=300s; then
+            echo "❌ Strimzi operator not ready after 5 minutes"
+            echo ""
+            echo "Operator pod status:"
+            kubectl get pods -n kafka
+            echo ""
+            echo "Operator logs:"
+            kubectl logs -n kafka deployment/strimzi-cluster-operator --tail=50
+            exit 1
+          fi
+          
+          echo ""
+          echo "Strimzi operator pod status:"
+          kubectl get pods -n kafka
+          
+          STRIMZI_READY=$(kubectl get pods -n kafka -l name=strimzi-cluster-operator --no-headers | grep Running | wc -l)
+          if [ "$STRIMZI_READY" -ge 1 ]; then
+            echo "✅ Strimzi operator is running ($STRIMZI_READY pods)"
+          else
+            echo "❌ Strimzi operator not running"
+            kubectl get pods -n kafka
+            exit 1
+          fi
+
+      # ============================================
+      # Verify 9: Strimzi CRDs are installed
+      # ============================================
+      - name: Verify - Strimzi Kafka CRDs are available
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "Checking Strimzi Custom Resource Definitions..."
+          
+          REQUIRED_CRDS=(
+            "kafkas.kafka.strimzi.io"
+            "kafkatopics.kafka.strimzi.io"
+            "kafkausers.kafka.strimzi.io"
+            "kafkaconnects.kafka.strimzi.io"
+            "kafkamirrormaker2s.kafka.strimzi.io"
+            "kafkanodepools.kafka.strimzi.io"
+          )
+          
+          ALL_CRDS_PRESENT=true
+          for CRD in "${REQUIRED_CRDS[@]}"; do
+            if kubectl get crd "$CRD" 2>/dev/null; then
+              echo "✅ CRD exists: $CRD"
+            else
+              echo "❌ CRD missing: $CRD"
+              ALL_CRDS_PRESENT=false
+            fi
+          done
+          
+          if [ "$ALL_CRDS_PRESENT" = "false" ]; then
+            echo ""
+            echo "❌ Some Strimzi CRDs are missing"
+            echo "Available Kafka-related CRDs:"
+            kubectl get crd | grep kafka
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ All required Strimzi CRDs are installed"
+          echo ""
+          echo "Strimzi version information:"
+          kubectl get deployment strimzi-cluster-operator -n kafka -o jsonpath='{.spec.template.spec.containers[0].image}'
+          echo ""
+
+      # ============================================
+      # Verify 10: Helm is installed on control plane
+      # ============================================
+      - name: Verify - Helm 3 is available
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          
+          echo "Checking Helm installation on control plane..."
+          HELM_VERSION=$(ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "helm version --short" 2>/dev/null)
+          
+          if [ -n "$HELM_VERSION" ]; then
+            echo "✅ Helm installed: $HELM_VERSION"
+          else
+            echo "❌ Helm not found on control plane"
+            exit 1
+          fi
+          
+          echo ""
+          echo "Helm repositories:"
+          ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "helm repo list" 2>/dev/null || echo "No repositories configured"
+
+      # ============================================
       # Display cluster information
       # ============================================
       - name: Display cluster information
@@ -445,8 +565,13 @@ jobs:
           echo "  Kafka Node: ssh root@$KAFKA_IP"
           echo ""
           echo "ArgoCD:"
-          echo "  Get password: ssh root@$CONTROL_IP 'cat /root/argocd-password.txt'"
-          echo "  Access via kubectl port-forward or NodePort"
+          echo "  Get password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+          echo "  Access via kubectl port-forward: kubectl port-forward svc/argocd-server -n argocd 8080:443"
+          echo ""
+          echo "Strimzi Kafka Operator:"
+          echo "  Version: 0.48.0 (Kafka 4.1.0 KRaft support)"
+          echo "  Deploy cluster: kubectl apply -f modules/strimzi/kafka-cluster-examples/dev.yaml"
+          echo "  Check status: kubectl get kafka -n kafka"
           echo ""
           echo "========================================"
 
@@ -471,15 +596,22 @@ jobs:
           echo "========================================"
           echo ""
           echo "✅ Infrastructure provisioned via Terraform"
-          echo "✅ K3s cluster operational"
-          echo "✅ ArgoCD installed"
+          echo "✅ K3s cluster operational (2 nodes)"
+          echo "✅ ArgoCD installed and running"
           echo "✅ Traefik ingress ready"
+          echo "✅ Helm 3 installed"
+          echo "✅ Strimzi Kafka Operator 0.48.0 installed"
+          echo "✅ Kafka CRDs available (KRaft mode ready)"
           echo ""
           echo "Next steps:"
           echo "  1. Download kubeconfig from workflow artifacts"
-          echo "  2. Install Strimzi Kafka operator (if needed)"
-          echo "  3. Deploy Kafka cluster"
-          echo "  4. Deploy your applications"
+          echo "  2. Deploy Kafka cluster: kubectl apply -f modules/strimzi/kafka-cluster-examples/dev.yaml"
+          echo "  3. Create Kafka topics"
+          echo "  4. Deploy your trading applications via ArgoCD"
+          echo ""
+          echo "Future services (not yet installed):"
+          echo "  - Prometheus (metrics collection)"
+          echo "  - Grafana (visualization)"
           echo ""
           echo "To destroy cluster: Use 'hcloud-maintenance' workflow with 'destroy-cluster' action"
           echo "========================================"
