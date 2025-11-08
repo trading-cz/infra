@@ -326,7 +326,8 @@ jobs:
           fi
           
           # Now wait for pods to be ready (5 minute timeout)
-          if ! kubectl wait --for=condition=ready pod -l app.kubernetes.io/part-of=argocd -n argocd --timeout=300s; then
+          # Use --all to wait for all pods in the namespace instead of label selector
+          if ! kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s; then
             echo "❌ ArgoCD pods not ready after 5 minutes"
             echo ""
             echo "Current pod status:"
