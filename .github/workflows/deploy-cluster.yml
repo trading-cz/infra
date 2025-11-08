@@ -125,11 +125,11 @@ jobs:
         id: tf_output
         run: |
           CONTROL_IP=$(terraform output -raw k3s_control_public_ip)
-          KAFKA_IP=$(terraform output -raw kafka_0_public_ip)
+          KAFKA_IP=$(terraform output -json kafka_server_public_ips | jq -r '.[0]')
           echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
           echo "kafka_ip=$KAFKA_IP" >> $GITHUB_OUTPUT
           echo "✅ Control Plane IP: $CONTROL_IP"
-          echo "✅ Kafka Node IP: $KAFKA_IP"
+          echo "✅ Kafka-0 Node IP: $KAFKA_IP"
 
       # ============================================
       # Verify 1: Servers are reachable
