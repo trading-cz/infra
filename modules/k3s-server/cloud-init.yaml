@@ -19,6 +19,9 @@ write_files:
       timeout 300 bash -c 'until kubectl get nodes 2>/dev/null; do sleep 5; done'
       
       chmod 644 /etc/rancher/k3s/k3s.yaml
+      
+      # Set KUBECONFIG for all subsequent kubectl and helm commands
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
       echo "$(date): K3s ready"
       
       # ============================================
@@ -31,7 +34,6 @@ write_files:
       # Install Strimzi Kafka Operator
       # ============================================
       echo "$(date): Installing Strimzi Kafka Operator..."
-      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
       
       helm repo add strimzi https://strimzi.io/charts/
       helm repo update
