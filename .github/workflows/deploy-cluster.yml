@@ -586,6 +586,70 @@ jobs:
           retention-days: 7
 
       # ============================================
+      # Bootstrap ArgoCD (Connect to Config Repo)
+      # ============================================
+      - name: Bootstrap ArgoCD - Connect to config repository
+        # Only bootstrap if TOKEN_GIT_REPO_CONFIG is configured
+        # Skip for initial deployments before config repo exists
+        continue-on-error: true  # Don't fail deployment if config repo not ready yet
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  ArgoCD Bootstrap - Auto Configuration"
+          echo "========================================"
+          echo ""
+          echo "⚙️  Configuring ArgoCD to access trading-cz/config repository..."
+          
+          # Test if config repo exists and is accessible
+          if curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${{ secrets.TOKEN_GIT_REPO_CONFIG }}" \
+             https://api.github.com/repos/trading-cz/config | grep -q "200"; then
+            echo "✅ Config repository is accessible"
+          else
+            echo "⚠️  Config repository not found or not accessible"
+            echo "   Create trading-cz/config repository first, then re-run deployment"
+            echo "   Or bootstrap manually using modules/argocd-bootstrap/"
+            exit 0  # Exit gracefully
+          fi
+          
+          # Create repository secret using TOKEN_GIT_REPO_CONFIG
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: trading-config-repo
+            namespace: argocd
+            labels:
+              argocd.argoproj.io/secret-type: repository
+          type: Opaque
+          stringData:
+            type: git
+            url: https://github.com/trading-cz/config.git
+            password: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
+            username: not-used
+          EOF
+          
+          echo "✅ Repository secret created"
+          echo ""
+          
+          # Deploy parent application
+          kubectl apply -f modules/argocd-bootstrap/parent-app.yaml
+          echo "✅ Parent application deployed"
+          echo ""
+          
+          # Wait for applications to be created
+          echo "⏳ Waiting for ArgoCD to detect applications..."
+          sleep 15
+          
+          echo "📋 ArgoCD Applications:"
+          kubectl get applications -n argocd || echo "No applications found yet (config repo may be empty)"
+          echo ""
+          echo "✅ ArgoCD bootstrap complete!"
+          echo "   ArgoCD will now auto-sync applications from trading-cz/config"
+          echo ""
+          echo "Next: Push Kubernetes manifests to trading-cz/config repo"
+
+      # ============================================
       # Summary
       # ============================================
       - name: Deployment summary
@@ -602,12 +666,16 @@ jobs:
           echo "✅ Helm 3 installed"
           echo "✅ Strimzi Kafka Operator 0.48.0 installed"
           echo "✅ Kafka CRDs available (KRaft mode ready)"
+          echo "✅ ArgoCD configured (connected to trading-cz/config repo)"
           echo ""
           echo "Next steps:"
-          echo "  1. Download kubeconfig from workflow artifacts"
-          echo "  2. Deploy Kafka cluster: kubectl apply -f modules/strimzi/kafka-cluster-examples/dev.yaml"
-          echo "  3. Create Kafka topics"
-          echo "  4. Deploy your trading applications via ArgoCD"
+          echo "  1. Create trading-cz/config repository (if not exists)"
+          echo "  2. Push Kubernetes manifests to config repo (see GITOPS_SETUP_GUIDE.md)"
+          echo "  3. ArgoCD will auto-deploy all applications"
+          echo "  4. Access ArgoCD UI: kubectl port-forward svc/argocd-server -n argocd 8080:443"
+          echo ""
+          echo "Manual bootstrap (if auto-bootstrap was skipped):"
+          echo "  cd modules/argocd-bootstrap && ./apply.ps1"
           echo ""
           echo "Future services (not yet installed):"
           echo "  - Prometheus (metrics collection)"
