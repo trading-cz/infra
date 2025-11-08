@@ -15,7 +15,7 @@ metadata:
     # ArgoCD requires HTTPS backend
     traefik.ingress.kubernetes.io/service.serversscheme: https
     # Don't verify ArgoCD's self-signed certificate
-    traefik.ingress.kubernetes.io/service.serverstransport: argocd-insecure@file
+    traefik.ingress.kubernetes.io/service.serverstransport: argocd-argocd-insecure@kubernetescrd
 spec:
   ingressClassName: traefik
   rules:
@@ -29,8 +29,6 @@ spec:
                 name: argocd-server
                 port:
                   name: https
-  tls:
-    - secretName: argocd-server-tls  # Use ArgoCD's built-in cert
 
 ---
 # Traefik ServersTransport - Allow insecure backend (ArgoCD self-signed cert)
