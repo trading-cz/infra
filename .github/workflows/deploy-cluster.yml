@@ -344,6 +344,18 @@ jobs:
           
           ARGOCD_READY=$(kubectl get pods -n argocd --no-headers | grep Running | wc -l)
           echo "✅ ArgoCD is running ($ARGOCD_READY pods ready)"
+          
+          echo ""
+          echo "Checking ArgoCD services..."
+          kubectl get svc -n argocd
+          
+          # Verify critical services exist
+          if kubectl get svc argocd-server -n argocd > /dev/null 2>&1; then
+            echo "✅ ArgoCD server service exists"
+          else
+            echo "❌ ArgoCD server service not found"
+            exit 1
+          fi
 
       # ============================================
       # Verify 6: Traefik ingress is running
@@ -648,6 +660,85 @@ jobs:
           echo "   ArgoCD will now auto-sync applications from trading-cz/config"
           echo ""
           echo "Next: Push Kubernetes manifests to trading-cz/config repo"
+
+      # ============================================
+      # Verify 11: ArgoCD is fully operational
+      # ============================================
+      - name: Verify - ArgoCD server is operational
+        if: success()  # Only run if bootstrap succeeded
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  ArgoCD Operational Verification"
+          echo "========================================"
+          echo ""
+          
+          # Check ArgoCD server health endpoint
+          echo "1️⃣  Checking ArgoCD server health..."
+          
+          # Port-forward in background (use job control to kill later)
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 > /dev/null 2>&1 &
+          PF_PID=$!
+          sleep 5
+          
+          # Test health endpoint
+          if curl -k -s https://localhost:8080/healthz | grep -q "ok"; then
+            echo "✅ ArgoCD server health endpoint responding"
+          else
+            echo "⚠️  ArgoCD server health endpoint not responding (may still be initializing)"
+          fi
+          
+          # Kill port-forward
+          kill $PF_PID 2>/dev/null || true
+          echo ""
+          
+          # Check repository connection
+          echo "2️⃣  Checking repository connections..."
+          kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository
+          
+          REPO_COUNT=$(kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository --no-headers | wc -l)
+          if [ "$REPO_COUNT" -ge 1 ]; then
+            echo "✅ Repository credentials configured ($REPO_COUNT repos)"
+          else
+            echo "⚠️  No repository credentials found"
+          fi
+          echo ""
+          
+          # Check applications
+          echo "3️⃣  Checking ArgoCD applications..."
+          kubectl get applications -n argocd -o wide || echo "No applications deployed yet"
+          
+          APP_COUNT=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
+          if [ "$APP_COUNT" -ge 1 ]; then
+            echo "✅ ArgoCD applications found: $APP_COUNT"
+            echo ""
+            echo "Application statuses:"
+            kubectl get applications -n argocd -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.health.status}{"\t"}{.status.sync.status}{"\n"}{end}' 2>/dev/null | \
+              awk 'BEGIN{print "NAME\tHEALTH\tSYNC"} {print}' || echo "Unable to fetch status"
+          else
+            echo "⚠️  No applications found (config repo may be empty or not synced yet)"
+          fi
+          echo ""
+          
+          # Check admin credentials
+          echo "4️⃣  Checking ArgoCD admin credentials..."
+          if kubectl get secret argocd-initial-admin-secret -n argocd > /dev/null 2>&1; then
+            echo "✅ Admin credentials available"
+            echo ""
+            echo "📋 To access ArgoCD UI:"
+            echo "   1. Port-forward: kubectl port-forward svc/argocd-server -n argocd 8080:443"
+            echo "   2. URL: https://localhost:8080"
+            echo "   3. Username: admin"
+            echo "   4. Password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+          else
+            echo "⚠️  Admin secret not found"
+          fi
+          echo ""
+          
+          echo "========================================"
+          echo "✅ ArgoCD Verification Complete"
+          echo "========================================"
 
       # ============================================
       # Summary
