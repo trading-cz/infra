@@ -15,8 +15,8 @@ datacenter   = "nbg1-dc3" # Required for Primary IPs
 # ============================================
 # Development Instance Types (Budget)
 # ============================================
-control_plane_server_type = "cx22" # 2 vCPU, 4GB RAM - minimum for K3s
-kafka_server_type         = "cx22" # 2 vCPU, 4GB RAM - budget option
+control_plane_server_type = "cx23" # 2 vCPU, 4GB RAM - minimum for K3s
+kafka_server_type         = "cx23" # 2 vCPU, 4GB RAM - budget option
 kafka_node_count          = 1      # Single node for dev testing
 
 # ============================================

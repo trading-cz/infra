@@ -59,3 +59,8 @@ variable "primary_ipv4_id" {
   type        = string
   default     = null
 }
+
+variable "k3s_server_ip" {
+  description = "Private IP of the K3s control plane server for agent to join"
+  type        = string
+}

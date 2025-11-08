@@ -67,6 +67,7 @@ module "kafka_server" {
   firewall_ids    = [module.network.firewall_id]
   private_ip      = cidrhost(var.subnet_cidr, 20 + count.index) # 10.0.1.20, 10.0.1.21, etc.
   primary_ipv4_id = count.index == 0 && var.kafka_primary_ip_id != "" ? var.kafka_primary_ip_id : null
+  k3s_server_ip   = var.control_plane_private_ip # Control plane private IP for K3s agent join
 
   labels = {
     environment = var.environment

@@ -171,26 +171,52 @@ jobs:
           echo "Waiting for cloud-init to complete..."
           
           # Wait for control plane cloud-init
+          CONTROL_READY=false
           for i in {1..60}; do
             if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "test -f /root/k3s-ready.txt" 2>/dev/null; then
               echo "✅ Control plane cloud-init completed"
-              ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /root/k3s-ready.txt"
+              CONTROL_READY=true
               break
             fi
             echo "Attempt $i/60: Waiting for control plane cloud-init (checking /root/k3s-ready.txt)..."
             sleep 5
           done
           
+          # If control plane not ready, show logs
+          if [ "$CONTROL_READY" = "false" ]; then
+            echo "❌ Control plane cloud-init failed or timed out"
+            echo "==== Cloud-init log ===="
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /root/cloud-init.log" 2>/dev/null || echo "No cloud-init.log found"
+            echo "==== Cloud-init status ===="
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cloud-init status" 2>/dev/null || echo "cloud-init status unavailable"
+            echo "==== System journal (last 50 lines) ===="
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "journalctl -u cloud-final.service -n 50 --no-pager" 2>/dev/null || echo "Journal unavailable"
+            exit 1
+          fi
+          
           # Wait for Kafka node cloud-init
+          KAFKA_READY=false
           for i in {1..60}; do
             if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null; then
               echo "✅ Kafka node cloud-init completed"
-              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "cat /root/k3s-agent-ready.txt"
+              KAFKA_READY=true
               break
             fi
             echo "Attempt $i/60: Waiting for Kafka node cloud-init (checking /root/k3s-agent-ready.txt)..."
             sleep 5
           done
+          
+          # If Kafka node not ready, show logs
+          if [ "$KAFKA_READY" = "false" ]; then
+            echo "❌ Kafka node cloud-init failed or timed out"
+            echo "==== Cloud-init log ===="
+            ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "cat /root/cloud-init.log" 2>/dev/null || echo "No cloud-init.log found"
+            echo "==== Cloud-init status ===="
+            ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "cloud-init status" 2>/dev/null || echo "cloud-init status unavailable"
+            echo "==== System journal (last 50 lines) ===="
+            ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "journalctl -u cloud-final.service -n 50 --no-pager" 2>/dev/null || echo "Journal unavailable"
+            exit 1
+          fi
 
       # ============================================
       # Verify 3: K3s cluster is operational

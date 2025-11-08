@@ -15,7 +15,9 @@ resource "hcloud_server" "kafka" {
   image       = var.image
   location    = var.location
   ssh_keys    = var.ssh_key_ids
-  user_data   = file("${path.module}/cloud-init.yaml")
+  user_data   = templatefile("${path.module}/cloud-init.yaml", {
+    k3s_server_ip = var.k3s_server_ip
+  })
 
   network {
     network_id = var.network_id

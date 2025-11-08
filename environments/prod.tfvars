@@ -15,8 +15,8 @@ datacenter   = "nbg1-dc3" # Required for Primary IPs
 # ============================================
 # Production Instance Types (Performance)
 # ============================================
-control_plane_server_type = "cx32" # 4 vCPU, 8GB RAM - better for production
-kafka_server_type         = "cx32" # 4 vCPU, 8GB RAM - better performance
+control_plane_server_type = "cx23" # 4 vCPU, 8GB RAM - better for production
+kafka_server_type         = "cx23" # 4 vCPU, 8GB RAM - better performance
 kafka_node_count          = 3      # 3 nodes minimum for KRaft quorum
 
 # ============================================
