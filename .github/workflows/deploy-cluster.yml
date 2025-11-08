@@ -203,6 +203,19 @@ jobs:
             exit 1
           fi
           
+          # Retrieve K3s token from control plane and push to worker nodes
+          echo "🔑 Retrieving K3s node token from control plane..."
+          K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null)
+          if [ -n "$K3S_TOKEN" ]; then
+            echo "✅ K3s token retrieved successfully"
+            echo "📤 Pushing token to Kafka node..."
+            ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"
+            echo "✅ Token pushed to worker node"
+          else
+            echo "❌ Failed to retrieve K3s token from control plane"
+            exit 1
+          fi
+          
           # Wait for Kafka node cloud-init
           KAFKA_READY=false
           for i in {1..60}; do

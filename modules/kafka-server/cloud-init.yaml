@@ -24,22 +24,27 @@ write_files:
         sleep 5
       done
       
-      echo "$(date): Retrieving K3s node token..."
-      for i in $(seq 1 24); do
-        K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes root@$K3S_SERVER_IP "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null)
-        if [ -n "$K3S_TOKEN" ]; then
-          echo "$(date): Token retrieved successfully"
-          echo "$K3S_TOKEN" > /tmp/k3s-token
-          break
+      echo "$(date): Waiting for K3s token..."
+      # Token will be pushed by GitHub Actions workflow after control plane is ready
+      for i in $(seq 1 60); do
+        if [ -f /tmp/k3s-token ]; then
+          echo "$(date): Token file found"
+          K3S_TOKEN=$(cat /tmp/k3s-token)
+          if [ -n "$K3S_TOKEN" ]; then
+            echo "$(date): Token retrieved successfully"
+            break
+          fi
         fi
-        echo "$(date): Attempt $i/24: Waiting for token..."
+        echo "$(date): Attempt $i/60: Waiting for token file /tmp/k3s-token..."
         sleep 5
       done
       
       echo "$(date): Installing K3s agent..."
-      if [ -f /tmp/k3s-token ]; then
-        K3S_TOKEN=$(cat /tmp/k3s-token)
-        curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable K3S_URL="https://$K3S_SERVER_IP:6443" K3S_TOKEN="$K3S_TOKEN" sh -
+      if [ -n "$K3S_TOKEN" ]; then
+        curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable \
+          K3S_URL="https://$K3S_SERVER_IP:6443" \
+          K3S_TOKEN="$K3S_TOKEN" sh -
+        echo "$(date): K3s agent installation completed"
       else
         echo "$(date): ERROR: Failed to retrieve K3s token"
         exit 1
