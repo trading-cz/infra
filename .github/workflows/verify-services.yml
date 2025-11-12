@@ -72,17 +72,20 @@ jobs:
             export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
             
             echo "🔍 Auto-detecting control plane IP..."
-            CONTROL_IP=$(hcloud server list -l environment=$ENV,role=k3s-control -o noheader -o columns=ipv4 | head -n 1)
+            CONTROL_IP=$(hcloud server list -l environment=$ENV,role=control-plane -o noheader -o columns=ipv4 | head -n 1)
             
             if [ -z "$CONTROL_IP" ]; then
-              echo "❌ Could not detect control plane IP"
-              echo "   Trying alternative method..."
+              echo "❌ Could not detect control plane IP with label filter"
+              echo "   Trying alternative method (JSON parsing)..."
               
-              # Fallback: Get first server with k3s-control role
-              CONTROL_IP=$(hcloud server list -l environment=$ENV,role=k3s-control --output=json | jq -r '.[0].public_net.ipv4.ip // empty')
+              # Fallback: Get first server with control-plane role using JSON
+              CONTROL_IP=$(hcloud server list -l environment=$ENV,role=control-plane --output=json | jq -r '.[0].public_net.ipv4.ip // empty')
               
               if [ -z "$CONTROL_IP" ]; then
-                echo "❌ Could not detect control plane IP"
+                echo "❌ Both methods failed to detect control plane IP"
+                echo "   Available servers:"
+                hcloud server list -l environment=$ENV --output=json | jq -r '.[] | "\(.labels.role) - \(.name) - \(.public_net.ipv4.ip)"'
+                echo ""
                 echo "   Provide manually via 'control_plane_ip' input"
                 exit 1
               fi
