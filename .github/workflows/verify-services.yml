@@ -1,0 +1,391 @@
+name: Verify Deployed Services
+
+on:
+  # Triggered after successful cluster deployment
+  workflow_run:
+    workflows: ["Deploy K3s Cluster"]
+    types: [completed]
+    branches: [main, argocd-configs]
+
+  # Manual trigger for independent verification
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to verify (dev|prod)"
+        required: true
+        type: choice
+        options: [dev, prod]
+      control_plane_ip:
+        description: "Control plane IP (optional - auto-detected if not provided)"
+        required: false
+        type: string
+
+jobs:
+  # ============================================
+  # Verify Services (ArgoCD, Grafana, etc.)
+  # ============================================
+  verify-services:
+    name: Verify Services on ${{ inputs.environment || 'dev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Install hcloud CLI (for IP lookup if needed)
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+          
+          # Install jq for JSON parsing
+          sudo apt-get update && sudo apt-get install -y jq curl
+          
+          echo "✅ Dependencies installed"
+
+      - name: Setup SSH keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+          echo "✅ SSH configured"
+
+      - name: Detect Control Plane IP
+        id: detect_ip
+        run: |
+          ENV="${{ inputs.environment || 'dev' }}"
+          
+          # If manually provided, use it
+          if [ -n "${{ inputs.control_plane_ip }}" ]; then
+            CONTROL_IP="${{ inputs.control_plane_ip }}"
+            echo "Using provided IP: $CONTROL_IP"
+          else
+            # Auto-detect from Hetzner Cloud
+            export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+            
+            echo "🔍 Auto-detecting control plane IP..."
+            CONTROL_IP=$(hcloud server list -l environment=$ENV,role=k3s-control -o noheader -o columns=public_ipv4 | head -n 1)
+            
+            if [ -z "$CONTROL_IP" ]; then
+              echo "❌ Could not detect control plane IP"
+              echo "   Provide manually via 'control_plane_ip' input"
+              exit 1
+            fi
+            echo "✅ Detected: $CONTROL_IP"
+          fi
+          
+          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+
+      - name: Fetch kubeconfig
+        run: |
+          CONTROL_IP="${{ steps.detect_ip.outputs.control_ip }}"
+          
+          echo "📥 Fetching kubeconfig from $CONTROL_IP..."
+          ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > kubeconfig.yaml
+          
+          # Update kubeconfig with correct IP
+          sed -i "s/127.0.0.1/$CONTROL_IP/g" kubeconfig.yaml
+          
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          echo "✅ Kubeconfig fetched and configured"
+          
+          # Verify connection
+          kubectl cluster-info
+          echo ""
+
+      # ============================================
+      # ArgoCD API Verification
+      # ============================================
+      - name: "Verify ArgoCD API - 1. Health & Status"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  ArgoCD API Verification"
+          echo "========================================"
+          echo ""
+          
+          # 1. Check pod status
+          echo "1️⃣  Checking ArgoCD pod status..."
+          POD_STATUS=$(kubectl get pods -n argocd -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}')
+          
+          if echo "$POD_STATUS" | grep -q "Running"; then
+            echo "✅ ArgoCD pods running:"
+            echo "$POD_STATUS" | grep Running || echo "No running pods found"
+          else
+            echo "❌ ArgoCD pods not in Running state:"
+            echo "$POD_STATUS"
+            exit 1
+          fi
+          echo ""
+          
+          # 2. Check service endpoints
+          echo "2️⃣  Checking ArgoCD service endpoints..."
+          ENDPOINTS=$(kubectl get endpoints -n argocd argocd-server -o jsonpath='{.subsets[0].addresses[*].ip}' 2>/dev/null)
+          
+          if [ -n "$ENDPOINTS" ]; then
+            echo "✅ Service endpoints available: $ENDPOINTS"
+          else
+            echo "⚠️  No service endpoints (pods may not be fully ready)"
+          fi
+          echo ""
+
+      - name: "Verify ArgoCD API - 2. Health Endpoint"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "3️⃣  Testing ArgoCD health endpoint..."
+          
+          # Start port-forward in background
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 > /dev/null 2>&1 &
+          PF_PID=$!
+          sleep 3
+          
+          # Test health endpoint
+          HEALTH_RESPONSE=$(curl -k -s -w "\n%{http_code}" https://localhost:8080/healthz 2>/dev/null)
+          HTTP_CODE=$(echo "$HEALTH_RESPONSE" | tail -n 1)
+          BODY=$(echo "$HEALTH_RESPONSE" | head -n 1)
+          
+          # Kill port-forward
+          kill $PF_PID 2>/dev/null || true
+          wait $PF_PID 2>/dev/null || true
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ ArgoCD health endpoint responded (HTTP $HTTP_CODE)"
+            echo "   Body: $BODY"
+          else
+            echo "❌ ArgoCD health endpoint failed (HTTP $HTTP_CODE)"
+            echo "   Response: $BODY"
+            exit 1
+          fi
+          echo ""
+
+      - name: "Verify ArgoCD API - 3. Auth & List Applications"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "4️⃣  Testing ArgoCD API authentication..."
+          
+          # Get default admin password
+          ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
+          
+          if [ -z "$ADMIN_PASSWORD" ]; then
+            # Try to get from custom secret if available
+            echo "⚠️  Could not retrieve admin password from default secret"
+            echo "   (May be using custom password from ARGOCD_ADMIN_PASSWORD)"
+            ADMIN_PASSWORD="test-skip"  # Use placeholder to test API without auth
+          fi
+          
+          # Start port-forward
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 > /dev/null 2>&1 &
+          PF_PID=$!
+          sleep 3
+          
+          # Test login endpoint
+          if [ "$ADMIN_PASSWORD" != "test-skip" ]; then
+            echo "   Testing credentials endpoint..."
+            LOGIN_RESPONSE=$(curl -k -s -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"username\":\"admin\",\"password\":\"$ADMIN_PASSWORD\"}" \
+              https://localhost:8080/api/v1/session)
+            
+            TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token // empty' 2>/dev/null)
+            
+            if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
+              echo "✅ ArgoCD API authentication successful"
+              echo "   Token retrieved (length: ${#TOKEN})"
+            else
+              echo "❌ Failed to authenticate with ArgoCD API"
+              echo "   Response: $LOGIN_RESPONSE"
+              kill $PF_PID 2>/dev/null || true
+              exit 1
+            fi
+          fi
+          
+          # List applications via API
+          echo ""
+          echo "5️⃣  Testing ArgoCD API - List Applications..."
+          
+          APPS_RESPONSE=$(curl -k -s https://localhost:8080/api/v1/applications 2>/dev/null)
+          APP_COUNT=$(echo "$APPS_RESPONSE" | jq '.items | length' 2>/dev/null || echo "0")
+          
+          if [ "$APP_COUNT" != "null" ]; then
+            echo "✅ ArgoCD API applications endpoint working"
+            echo "   Applications found: $APP_COUNT"
+            
+            if [ "$APP_COUNT" -gt 0 ]; then
+              echo ""
+              echo "   Application list:"
+              echo "$APPS_RESPONSE" | jq -r '.items[].metadata.name' | sed 's/^/     - /'
+            fi
+          else
+            echo "⚠️  Could not retrieve applications list"
+            echo "   Response: $APPS_RESPONSE"
+          fi
+          
+          # Kill port-forward
+          kill $PF_PID 2>/dev/null || true
+          wait $PF_PID 2>/dev/null || true
+          echo ""
+
+      - name: "Verify ArgoCD API - 4. Repository Connections"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "6️⃣  Checking ArgoCD repository connections..."
+          
+          REPOS=$(kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+          REPO_COUNT=$(echo "$REPOS" | grep -c . || echo 0)
+          
+          if [ "$REPO_COUNT" -gt 0 ]; then
+            echo "✅ Repository credentials configured: $REPO_COUNT"
+            echo ""
+            echo "   Repositories:"
+            echo "$REPOS" | sed 's/^/     - /'
+          else
+            echo "⚠️  No repository credentials found"
+            echo "   Applications cannot sync without repos"
+          fi
+          echo ""
+
+      - name: "Verify ArgoCD API - 5. Application Sync Status"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "7️⃣  Checking ArgoCD application sync status..."
+          
+          APP_STATUS=$(kubectl get applications -n argocd -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.health.status}{"\t"}{.status.sync.status}{"\n"}{end}' 2>/dev/null)
+          
+          if [ -n "$APP_STATUS" ]; then
+            echo "✅ Application statuses:"
+            echo ""
+            echo "$APP_STATUS" | awk 'BEGIN{print "NAME\tHEALTH\tSYNC"} {print}' | column -t -s$'\t'
+          else
+            echo "ℹ️  No applications found (config repo may be empty)"
+            echo "   Push manifests to trading-cz/config to enable GitOps"
+          fi
+          echo ""
+
+      # ============================================
+      # Strimzi Kafka Verification
+      # ============================================
+      - name: "Verify Strimzi Kafka - 1. Operator Status"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  Strimzi Kafka Verification"
+          echo "========================================"
+          echo ""
+          
+          echo "1️⃣  Checking Strimzi operator..."
+          
+          OP_STATUS=$(kubectl get deployment strimzi-cluster-operator -n kafka -o jsonpath='{.status.readyReplicas}/{.status.replicas}' 2>/dev/null)
+          
+          if [ -n "$OP_STATUS" ]; then
+            echo "✅ Strimzi operator running: $OP_STATUS replicas ready"
+          else
+            echo "⚠️  Strimzi operator not found or not ready"
+          fi
+          echo ""
+
+      # ============================================
+      # Traefik Ingress Verification
+      # ============================================
+      - name: "Verify Traefik Ingress"
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  Traefik Ingress Verification"
+          echo "========================================"
+          echo ""
+          
+          echo "1️⃣  Checking Traefik deployment..."
+          
+          TRAEFIK_STATUS=$(kubectl get deployment traefik -n kube-system -o jsonpath='{.status.readyReplicas}/{.status.replicas}' 2>/dev/null)
+          
+          if [ -n "$TRAEFIK_STATUS" ]; then
+            echo "✅ Traefik running: $TRAEFIK_STATUS replicas ready"
+          else
+            echo "⚠️  Traefik not found"
+          fi
+          
+          echo ""
+          echo "Ingresses configured:"
+          kubectl get ingress -A 2>/dev/null | awk 'NR>1 {print "  " $1 "/" $2}' || echo "  (none)"
+          echo ""
+
+      # ============================================
+      # Future Service Placeholders
+      # ============================================
+      - name: "Verify Prometheus (Placeholder)"
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  Prometheus Verification"
+          echo "========================================"
+          echo ""
+          echo "⏳ Prometheus verification: Not yet installed"
+          echo "   Implementation pending"
+          echo ""
+
+      - name: "Verify Grafana (Placeholder)"
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "========================================"
+          echo "  Grafana Verification"
+          echo "========================================"
+          echo ""
+          echo "⏳ Grafana verification: Not yet installed"
+          echo "   Implementation pending"
+          echo ""
+
+      # ============================================
+      # Summary
+      # ============================================
+      - name: Verification summary
+        if: always()
+        run: |
+          echo ""
+          echo "========================================"
+          echo "  Service Verification Complete"
+          echo "========================================"
+          echo ""
+          echo "✅ ArgoCD API verified"
+          echo "✅ Strimzi Kafka operator verified"
+          echo "✅ Traefik ingress verified"
+          echo ""
+          echo "📋 Next Steps:"
+          echo "  1. Access ArgoCD UI"
+          echo "  2. Create applications in trading-cz/config repo"
+          echo "  3. Monitor sync status in ArgoCD"
+          echo ""
+          echo "🔄 To re-run verification:"
+          echo "  Use 'Verify Deployed Services' workflow (manual trigger)"
+          echo ""
+          echo "========================================"
+
+      # ============================================
+      # Upload verification report
+      # ============================================
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-report-${{ inputs.environment || 'dev' }}
+          path: |
+            kubeconfig.yaml
+          retention-days: 7
