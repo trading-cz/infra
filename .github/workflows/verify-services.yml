@@ -134,50 +134,48 @@ jobs:
           echo "" >> /tmp/verify-results/report.txt
 
       # ============================================
-      # PHASE 1: PUBLIC IP AVAILABILITY
+      # PHASE 1: PUBLIC IP & SSH ACCESSIBILITY
       # ============================================
-      - name: Test Public IP - Control Plane Ping
-        id: test_control_ping
+      - name: Test Public IP - Control Plane SSH Connectivity
+        id: test_control_ip
         continue-on-error: true
         run: |
           CONTROL_IP="${{ steps.detect_ips.outputs.control_ip }}"
           
-          echo "🔍 Testing Control Plane public IP availability (ping)..."
-          echo "   Target: $CONTROL_IP"
+          echo "🔍 Testing Control Plane public IP availability (SSH)..."
+          echo "   Target: $CONTROL_IP:22"
           
-          if ping -c 3 -W 5 "$CONTROL_IP" > /tmp/control_ping.log 2>&1; then
-            echo "✅ Control Plane is reachable via ping"
+          # Test if port 22 is accessible (proves IP is reachable)
+          if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$CONTROL_IP/22" 2>/dev/null; then
+            echo "✅ Control Plane is reachable on port 22 (IP is accessible)"
             echo "status=pass" >> $GITHUB_OUTPUT
-            cat /tmp/control_ping.log
           else
-            echo "❌ Control Plane ping FAILED"
+            echo "❌ Control Plane port 22 NOT reachable"
             echo "status=fail" >> $GITHUB_OUTPUT
-            cat /tmp/control_ping.log
           fi
 
-      - name: Test Public IP - Kafka Node Ping
-        id: test_kafka_ping
+      - name: Test Public IP - Kafka Node SSH Connectivity
+        id: test_kafka_ip
         continue-on-error: true
         run: |
           KAFKA_IP="${{ steps.detect_ips.outputs.kafka_ip }}"
           
           if [ "$KAFKA_IP" == "N/A" ]; then
-            echo "⏭️  Skipping Kafka ping test (IP not available)"
+            echo "⏭️  Skipping Kafka IP test (node not available)"
             echo "status=skip" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          echo "🔍 Testing Kafka Node public IP availability (ping)..."
-          echo "   Target: $KAFKA_IP"
+          echo "🔍 Testing Kafka Node public IP availability (SSH)..."
+          echo "   Target: $KAFKA_IP:22"
           
-          if ping -c 3 -W 5 "$KAFKA_IP" > /tmp/kafka_ping.log 2>&1; then
-            echo "✅ Kafka Node is reachable via ping"
+          # Test if port 22 is accessible (proves IP is reachable)
+          if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/22" 2>/dev/null; then
+            echo "✅ Kafka Node is reachable on port 22 (IP is accessible)"
             echo "status=pass" >> $GITHUB_OUTPUT
-            cat /tmp/kafka_ping.log
           else
-            echo "❌ Kafka Node ping FAILED"
+            echo "❌ Kafka Node port 22 NOT reachable"
             echo "status=fail" >> $GITHUB_OUTPUT
-            cat /tmp/kafka_ping.log
           fi
 
       # ============================================
@@ -241,7 +239,6 @@ jobs:
         continue-on-error: true
         run: |
           KAFKA_IP="${{ steps.detect_ips.outputs.kafka_ip }}"
-          export KUBECONFIG=$PWD/kubeconfig.yaml
           
           if [ "$KAFKA_IP" == "N/A" ]; then
             echo "⏭️  Skipping Kafka K3s integration test (IP not available)"
@@ -249,21 +246,37 @@ jobs:
             exit 0
           fi
           
+          # Verify kubeconfig exists (should have been fetched in previous step)
+          if [ ! -f "kubeconfig.yaml" ]; then
+            echo "❌ Kubeconfig not found - cannot test K3s integration"
+            echo "   This test depends on 'K3s Cluster Connection' step completing first"
+            echo "status=fail" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
           echo "🔍 Testing Kafka Node K3s integration..."
           echo "   Verifying node appears in cluster..."
           
           # Check if Kafka node is in cluster
-          KAFKA_NODE=$(kubectl get nodes -o wide | grep -i kafka || echo "")
-          
-          if [ -n "$KAFKA_NODE" ]; then
-            echo "✅ Kafka node found in K3s cluster"
-            echo "$KAFKA_NODE"
-            echo "status=pass" >> $GITHUB_OUTPUT
+          if kubectl get nodes > /dev/null 2>&1; then
+            KAFKA_NODE=$(kubectl get nodes -o wide 2>/dev/null | grep -i kafka || echo "")
+            
+            if [ -n "$KAFKA_NODE" ]; then
+              echo "✅ Kafka node found in K3s cluster"
+              echo "$KAFKA_NODE"
+              echo "status=pass" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️  Kafka node not found in K3s cluster"
+              echo "   All nodes:"
+              kubectl get nodes -o wide
+              echo "status=partial" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "⚠️  Kafka node not found in K3s cluster"
-            echo "   All nodes:"
-            kubectl get nodes -o wide
-            echo "status=partial" >> $GITHUB_OUTPUT
+            echo "❌ Cannot connect to K3s cluster"
+            echo "status=fail" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
       # ============================================
@@ -540,13 +553,21 @@ jobs:
         continue-on-error: true
         run: |
           KAFKA_IP="${{ steps.detect_ips.outputs.kafka_ip }}"
-          export KUBECONFIG=$PWD/kubeconfig.yaml
           
           if [ "$KAFKA_IP" == "N/A" ]; then
             echo "⏭️  Skipping Kafka network tests (IP not available)"
             echo "status=skip" >> $GITHUB_OUTPUT
             exit 0
           fi
+          
+          # Verify kubeconfig exists (should have been fetched in previous step)
+          if [ ! -f "kubeconfig.yaml" ]; then
+            echo "❌ Kubeconfig not found - cannot test Kafka services"
+            echo "status=fail" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          export KUBECONFIG=$PWD/kubeconfig.yaml
           
           echo "🔍 Testing Kafka NodePort accessibility..."
           echo "   Target: $KAFKA_IP:33333 (external bootstrap)"
@@ -617,10 +638,10 @@ jobs:
           
           # Collect all test results
           TESTS=(
-            "test_control_ping:Control Plane Ping"
-            "test_kafka_ping:Kafka Node Ping"
-            "test_control_ssh:Control Plane SSH"
-            "test_kafka_ssh:Kafka Node SSH"
+            "test_control_ip:Control Plane IP Reachability"
+            "test_kafka_ip:Kafka Node IP Reachability"
+            "test_control_ssh:Control Plane SSH Login"
+            "test_kafka_ssh:Kafka Node SSH Login"
             "test_kafka_k3s:Kafka K3s Integration"
             "test_k3s_cluster:K3s Cluster Connection"
             "test_k3s_nodes:K3s Nodes Status"
