@@ -236,6 +236,36 @@ jobs:
             echo "status=fail" >> $GITHUB_OUTPUT
           fi
 
+      - name: Test Kafka Node K3s Integration
+        id: test_kafka_k3s
+        continue-on-error: true
+        run: |
+          KAFKA_IP="${{ steps.detect_ips.outputs.kafka_ip }}"
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          if [ "$KAFKA_IP" == "N/A" ]; then
+            echo "⏭️  Skipping Kafka K3s integration test (IP not available)"
+            echo "status=skip" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "🔍 Testing Kafka Node K3s integration..."
+          echo "   Verifying node appears in cluster..."
+          
+          # Check if Kafka node is in cluster
+          KAFKA_NODE=$(kubectl get nodes -o wide | grep -i kafka || echo "")
+          
+          if [ -n "$KAFKA_NODE" ]; then
+            echo "✅ Kafka node found in K3s cluster"
+            echo "$KAFKA_NODE"
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  Kafka node not found in K3s cluster"
+            echo "   All nodes:"
+            kubectl get nodes -o wide
+            echo "status=partial" >> $GITHUB_OUTPUT
+          fi
+
       # ============================================
       # PHASE 3: K3S & KUBERNETES CLUSTER
       # ============================================
@@ -510,6 +540,7 @@ jobs:
         continue-on-error: true
         run: |
           KAFKA_IP="${{ steps.detect_ips.outputs.kafka_ip }}"
+          export KUBECONFIG=$PWD/kubeconfig.yaml
           
           if [ "$KAFKA_IP" == "N/A" ]; then
             echo "⏭️  Skipping Kafka network tests (IP not available)"
@@ -517,32 +548,56 @@ jobs:
             exit 0
           fi
           
-          echo "🔍 Testing Kafka network connectivity..."
-          echo "   Target: $KAFKA_IP"
+          echo "🔍 Testing Kafka NodePort accessibility..."
+          echo "   Target: $KAFKA_IP:33333 (external bootstrap)"
           
-          # Standard Kafka ports
-          KAFKA_PORTS=(9092 9094 32100 33333)
+          # Test external NodePort (33333) from internet
+          echo ""
+          echo "📊 Testing external Kafka NodePort (33333)..."
           
-          ANY_PORT_OPEN=false
-          for PORT in "${KAFKA_PORTS[@]}"; do
-            echo ""
-            echo "   Testing port $PORT..."
-            if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/$PORT" 2>/dev/null; then
-              echo "   ✅ Port $PORT is open"
-              ANY_PORT_OPEN=true
-            else
-              echo "   ⏭️  Port $PORT not open (may not be needed)"
-            fi
-          done
-          
-          if [ "$ANY_PORT_OPEN" = "true" ]; then
-            echo ""
-            echo "✅ At least one Kafka port is accessible"
+          if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/33333" 2>/dev/null; then
+            echo "✅ Kafka NodePort 33333 is accessible from internet"
+            echo "   Can connect: telnet $KAFKA_IP 33333"
             echo "status=pass" >> $GITHUB_OUTPUT
           else
-            echo ""
-            echo "⚠️  No Kafka ports are currently open (cluster may not be deployed yet)"
+            echo "⚠️  Kafka NodePort 33333 not accessible (cluster may not be deployed)"
+            echo "   Expected: Strimzi Kafka broker listening on external NodePort"
             echo "status=partial" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check from cluster perspective (kubectl service discovery)
+          echo ""
+          echo "📊 Checking Kafka services from K3s cluster..."
+          
+          if kubectl get svc -n kafka 2>/dev/null | grep -q kafka; then
+            echo "✅ Kafka service(s) found in cluster"
+            kubectl get svc -n kafka
+            
+            # Get bootstrap service details
+            BOOTSTRAP_SVC=$(kubectl get svc -n kafka -o name 2>/dev/null | grep bootstrap | head -1)
+            if [ -n "$BOOTSTRAP_SVC" ]; then
+              echo ""
+              echo "✅ Kafka bootstrap service found: $BOOTSTRAP_SVC"
+              
+              # Show service endpoints
+              kubectl describe $BOOTSTRAP_SVC -n kafka
+              
+              # Extract NodePort
+              NODEPORT=$(kubectl get $BOOTSTRAP_SVC -n kafka -o jsonpath='{.spec.ports[?(@.name=="external")].nodePort}' 2>/dev/null)
+              if [ -z "$NODEPORT" ]; then
+                NODEPORT=$(kubectl get $BOOTSTRAP_SVC -n kafka -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)
+              fi
+              
+              if [ -n "$NODEPORT" ] && [ "$NODEPORT" != "null" ]; then
+                echo ""
+                echo "📋 Kafka Access Details:"
+                echo "   External:  $KAFKA_IP:$NODEPORT"
+                echo "   Internal:  trading-cluster-kafka-bootstrap.kafka:9092"
+              fi
+            fi
+          else
+            echo "⚠️  No Kafka services found (cluster may not be deployed yet)"
+            echo "   Expected: kafka namespace with Strimzi-managed Kafka broker"
           fi
 
       # ============================================
@@ -566,6 +621,7 @@ jobs:
             "test_kafka_ping:Kafka Node Ping"
             "test_control_ssh:Control Plane SSH"
             "test_kafka_ssh:Kafka Node SSH"
+            "test_kafka_k3s:Kafka K3s Integration"
             "test_k3s_cluster:K3s Cluster Connection"
             "test_k3s_nodes:K3s Nodes Status"
             "test_k3s_pods:K3s System Pods"

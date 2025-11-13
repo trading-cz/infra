@@ -43,11 +43,19 @@ resource "hcloud_firewall" "main" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  # HTTPS access
+  # HTTPS access (ArgoCD UI via Traefik ingress)
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "443"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # Kafka NodePort (external bootstrap access)
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "33333"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 }
