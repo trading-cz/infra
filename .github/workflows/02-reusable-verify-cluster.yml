@@ -1,0 +1,75 @@
+name: 'Reusable: Verify K3s Cluster'
+
+on:
+  workflow_call:
+    inputs:
+      kubeconfig:
+        description: 'Kubeconfig file content'
+        required: true
+        type: string
+      control_plane_ip:
+        description: 'Control Plane IP'
+        required: true
+        type: string
+
+jobs:
+  verify:
+    name: Verify K3s cluster
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Setup Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ inputs.kubeconfig }}" > ~/.kube/config
+
+      - name: Verify K3s Nodes
+        run: |
+          kubectl get nodes
+          NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
+          if [ "$NODE_COUNT" -ge 2 ]; then
+            echo "✅ K3s cluster operational with $NODE_COUNT nodes"
+          else
+            echo "❌ Expected at least 2 nodes, found $NODE_COUNT"
+            exit 1
+          fi
+
+      - name: Verify System Pods
+        run: |
+          echo "Waiting for CoreDNS to be ready..."
+          kubectl wait --for=condition=ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
+          COREDNS_COUNT=$(kubectl get pods -n kube-system -l k8s-app=kube-dns --no-headers | grep Running | wc -l)
+          if [ "$COREDNS_COUNT" -ge 1 ]; then
+            echo "✅ CoreDNS running ($COREDNS_COUNT pods)"
+          else
+            echo "❌ CoreDNS not running"
+            exit 1
+          fi
+
+      - name: Verify Traefik Ingress
+        run: |
+          if kubectl get deployment traefik -n kube-system 2>/dev/null; then
+            echo "✅ Traefik deployment found in kube-system"
+            TRAEFIK_READY=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik --no-headers | grep Running | wc -l)
+            if [ "$TRAEFIK_READY" -ge 1 ]; then
+              echo "✅ Traefik is running ($TRAEFIIK_READY pods)"
+            else
+              echo "⚠️ Traefik pods not running yet"
+            fi
+          else
+            echo "⚠️ Traefik not found"
+          fi
+          
+      - name: Verify Network Ports
+        run: |
+          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${{ inputs.control_plane_ip }}/6443" 2>/dev/null; then
+            echo "✅ K3s API port 6443 is open"
+          else
+            echo "❌ K3s API port 6443 is not accessible"
+            exit 1
+          fi

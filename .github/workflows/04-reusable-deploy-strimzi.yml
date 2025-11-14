@@ -1,0 +1,64 @@
+name: 'Reusable: Deploy Strimzi'
+
+on:
+  workflow_call:
+    inputs:
+      kubeconfig:
+        description: 'Kubeconfig file content'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy and Verify Strimzi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Setup Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ inputs.kubeconfig }}" > ~/.kube/config
+
+      - name: Verify Strimzi Kafka Operator
+        run: |
+          if kubectl get namespace kafka 2>/dev/null; then
+            echo "✅ Kafka namespace exists"
+          else
+            echo "❌ Kafka namespace not found. It should be created by ArgoCD."
+            exit 1
+          fi
+          
+          echo "Waiting for Strimzi operator to be ready..."
+          if ! kubectl wait --for=condition=available deployment/strimzi-cluster-operator -n kafka --timeout=300s; then
+            echo "❌ Strimzi operator not ready after 5 minutes"
+            kubectl logs -n kafka deployment/strimzi-cluster-operator --tail=50
+            exit 1
+          fi
+          echo "✅ Strimzi operator is running"
+
+      - name: Verify Strimzi Kafka CRDs
+        run: |
+          REQUIRED_CRDS=(
+            "kafkas.kafka.strimzi.io"
+            "kafkatopics.kafka.strimzi.io"
+            "kafkausers.kafka.strimzi.io"
+          )
+          ALL_CRDS_PRESENT=true
+          for CRD in "${REQUIRED_CRDS[@]}"; do
+            if kubectl get crd "$CRD" 2>/dev/null; then
+              echo "✅ CRD exists: $CRD"
+            else
+              echo "❌ CRD missing: $CRD"
+              ALL_CRDS_PRESENT=false
+            fi
+          done
+          if [ "$ALL_CRDS_PRESENT" = "false" ]; then
+            echo "❌ Some Strimzi CRDs are missing"
+            exit 1
+          fi
+          echo "✅ All required Strimzi CRDs are installed"
