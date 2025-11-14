@@ -566,11 +566,12 @@ jobs:
       # Bootstrap ArgoCD (Connect to Config Repo)
       # ============================================
       - name: Bootstrap ArgoCD - Connect to config repository
+        working-directory: infra
         # Only bootstrap if TOKEN_GIT_REPO_CONFIG is configured
         # Skip for initial deployments before config repo exists
         continue-on-error: true  # Don't fail deployment if config repo not ready yet
         run: |
-          export KUBECONFIG=$PWD/kubeconfig.yaml
+          export KUBECONFIG=$PWD/../kubeconfig.yaml
           
           echo "========================================"
           echo "  ArgoCD Bootstrap - Auto Configuration"
