@@ -51,6 +51,14 @@ resource "hcloud_firewall" "main" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
+  # HTTP access (redirects to HTTPS via Traefik)
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "80"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
   # Kafka NodePort (external bootstrap access)
   rule {
     direction  = "in"

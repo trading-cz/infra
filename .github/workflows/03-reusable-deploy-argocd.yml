@@ -420,94 +420,92 @@ jobs:
           echo "Password: $ADMIN_PASSWORD"
           echo "=========================================="
 
-      - name: Verify ArgoCD UI Accessibility
+      - name: Verify ArgoCD UI Accessibility via Ingress
         run: |
           echo "========================================"
-          echo "Verifying ArgoCD UI HTTP Accessibility"
+          echo "Verifying ArgoCD UI via Traefik Ingress"
           echo "========================================"
           
           CONTROL_IP="${{ inputs.control_plane_ip }}"
           
-          # Get the main ArgoCD server service (not metrics)
-          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep "trading-argocd-server$" | head -1 | cut -d'/' -f2)
-          
-          if [ -z "$ARGOCD_SERVICE" ]; then
-            echo "❌ ArgoCD service not found"
-            echo "Available services:"
-            kubectl get svc -n argocd
-            exit 1
+          # Check if Ingress exists
+          echo "Checking for ArgoCD Ingress..."
+          if ! kubectl get ingress -n argocd 2>/dev/null | grep -q "trading-argocd"; then
+            echo "⚠️  ArgoCD Ingress not found yet"
+            echo "Available ingresses:"
+            kubectl get ingress -n argocd || echo "No ingresses in argocd namespace"
+            echo ""
+            echo "This may take a moment for the operator to create..."
+            sleep 10
           fi
           
-          # Get NodePort for HTTP (port 80)
-          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
+          # Get Ingress details
+          INGRESS_NAME=$(kubectl get ingress -n argocd -o name 2>/dev/null | grep "trading-argocd" | head -1 | cut -d'/' -f2 || echo "")
           
-          if [ -z "$NODEPORT" ]; then
-            echo "⚠️  HTTP port not found, trying first port..."
-            NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
+          if [ -n "$INGRESS_NAME" ]; then
+            echo "✅ Found Ingress: $INGRESS_NAME"
+            kubectl get ingress $INGRESS_NAME -n argocd
+            echo ""
           fi
           
-          if [ -z "$NODEPORT" ]; then
-            echo "❌ Could not determine NodePort"
-            kubectl get svc $ARGOCD_SERVICE -n argocd -o yaml
-            exit 1
-          fi
-          
-          echo "ArgoCD Service: $ARGOCD_SERVICE"
-          echo "NodePort: $NODEPORT"
-          echo "Testing URL: http://$CONTROL_IP:$NODEPORT"
+          # Check Traefik service for external access
+          echo "Checking Traefik LoadBalancer service..."
+          kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik || true
           echo ""
           
-          # Additional wait time for ArgoCD server to fully initialize
-          echo "Waiting additional time for ArgoCD server to fully initialize HTTP service..."
-          echo "ArgoCD server needs time to start accepting HTTP connections after pod is ready"
-          sleep 45
+          # Wait for ArgoCD server to be ready
+          echo "Waiting for ArgoCD server pod to be ready..."
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=trading-argocd-server -n argocd --timeout=120s || {
+            echo "⚠️  ArgoCD server pod not ready"
+            kubectl get pods -n argocd
+          }
           
-          # Test HTTP accessibility with longer timeout and more attempts
-          echo "Testing HTTP accessibility..."
-          MAX_ATTEMPTS=20
+          echo ""
+          echo "Waiting for ArgoCD server to fully initialize..."
+          sleep 30
+          
+          # Test HTTP accessibility via port 80 (Traefik)
+          echo "Testing HTTP accessibility via Traefik (port 80)..."
+          MAX_ATTEMPTS=15
           for i in $(seq 1 $MAX_ATTEMPTS); do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "000")
+            # Test with Host header
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+              -H "Host: argocd.dev.trading.local" \
+              "http://$CONTROL_IP" 2>/dev/null || echo "000")
             
-            if echo "$HTTP_CODE" | grep -q "200\|302\|401"; then
-              echo "✅ ArgoCD UI is accessible at http://$CONTROL_IP:$NODEPORT"
+            if echo "$HTTP_CODE" | grep -q "200\|302\|307\|308"; then
+              echo "✅ ArgoCD UI is accessible via Traefik Ingress"
               echo "   HTTP Status: $HTTP_CODE"
-              
-              # Try to get the actual page title
-              RESPONSE=$(curl -s --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "")
-              if echo "$RESPONSE" | grep -qi "argocd\|argo cd"; then
-                echo "✅ Confirmed ArgoCD UI page is being served"
-              else
-                echo "⚠️  Page accessible but content verification inconclusive"
-              fi
+              echo "   Access via: http://$CONTROL_IP (with Host: argocd.dev.trading.local)"
+              echo "   Or add to /etc/hosts: $CONTROL_IP argocd.dev.trading.local"
               break
             fi
             
-            echo "⏳ Attempt $i/$MAX_ATTEMPTS: HTTP $HTTP_CODE, waiting for UI to respond..."
+            echo "⏳ Attempt $i/$MAX_ATTEMPTS: HTTP $HTTP_CODE, waiting for Ingress to respond..."
             sleep 5
             
             if [ $i -eq $MAX_ATTEMPTS ]; then
-              echo "⚠️  ArgoCD UI not accessible after $MAX_ATTEMPTS attempts"
+              echo "⚠️  ArgoCD UI not accessible via Ingress after $MAX_ATTEMPTS attempts"
               echo ""
               echo "Debugging information:"
               echo "===================="
-              echo "Service details:"
-              kubectl get svc -n argocd
+              echo "Ingress details:"
+              kubectl get ingress -n argocd -o wide || true
               echo ""
-              echo "Pod status:"
-              kubectl get pods -n argocd
+              echo "Traefik pods:"
+              kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik || true
               echo ""
-              echo "Endpoint details:"
-              kubectl get endpoints trading-argocd-server -n argocd -o yaml || true
+              echo "ArgoCD server service:"
+              kubectl get svc -n argocd -l app.kubernetes.io/name=trading-argocd-server || true
               echo ""
-              echo "Server logs (last 50 lines):"
-              kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=50 || true
+              echo "ArgoCD server pods:"
+              kubectl get pods -n argocd -l app.kubernetes.io/name=trading-argocd-server || true
               echo ""
               echo "===================="
-              echo "⚠️  Note: ArgoCD may still be initializing. Check manually:"
-              echo "   curl http://$CONTROL_IP:$NODEPORT"
+              echo "⚠️  Manual verification:"
+              echo "   curl -H 'Host: argocd.dev.trading.local' http://$CONTROL_IP"
               echo ""
-              echo "Continuing deployment despite UI check failure..."
-              echo "   The UI may become accessible shortly."
+              echo "Continuing deployment..."
             fi
           done
           
@@ -517,29 +515,31 @@ jobs:
         run: |
           CONTROL_IP="${{ inputs.control_plane_ip }}"
           
-          # Get NodePort from service
-          NODEPORT=$(kubectl get svc trading-argocd-server -n argocd -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}' 2>/dev/null || echo "")
-          
-          if [ -z "$NODEPORT" ]; then
-            NODEPORT=$(kubectl get svc -n argocd -o name | grep "trading-argocd-server$" | head -1 | xargs -I {} kubectl get {} -n argocd -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
-          fi
-          
           echo "=========================================="
           echo "  ArgoCD Installation Summary"
           echo "=========================================="
           echo "Namespace: argocd"
-          if [ "$NODEPORT" != "N/A" ]; then
-            echo "ArgoCD UI: http://$CONTROL_IP:$NODEPORT"
-          else
-            echo "ArgoCD UI: Check service for NodePort"
-          fi
-          echo "Username: admin"
+          echo ""
+          echo "Access Methods:"
+          echo "  1. Via Traefik Ingress (port 80):"
+          echo "     curl -H 'Host: argocd.dev.trading.local' http://$CONTROL_IP"
+          echo ""
+          echo "  2. Add to /etc/hosts (or C:\\Windows\\System32\\drivers\\etc\\hosts):"
+          echo "     $CONTROL_IP argocd.dev.trading.local"
+          echo "     Then browse: http://argocd.dev.trading.local"
+          echo ""
+          echo "Credentials:"
+          echo "  Username: admin"
+          echo "  Password: (see previous step)"
           echo ""
           echo "Pods:"
           kubectl get pods -n argocd
           echo ""
           echo "Services:"
           kubectl get svc -n argocd
+          echo ""
+          echo "Ingress:"
+          kubectl get ingress -n argocd 2>/dev/null || echo "No ingress configured yet"
           echo ""
           echo "Applications:"
           kubectl get applications -n argocd 2>/dev/null || echo "No applications yet"
