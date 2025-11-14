@@ -52,28 +52,59 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ inputs.kubeconfig }}" > ~/.kube/config
 
-      - name: Install Helm
-        run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          helm version
-
       - name: Install ArgoCD Operator
         run: |
-          echo "Installing ArgoCD Operator via Helm..."
-          helm repo add argo https://argoproj.github.io/argo-helm
-          helm repo update
+          echo "=========================================="
+          echo "Installing ArgoCD Operator v0.15.0"
+          echo "Method: kubectl apply (manual installation)"
+          echo "=========================================="
           
-          helm install argocd-operator argo/argocd-operator \
-            --namespace argocd \
-            --create-namespace \
-            --version 0.15.0 \
-            --set replicaCount=1 \
-            --wait \
-            --timeout 5m
+          # Download and extract the operator release
+          OPERATOR_VERSION="v0.15.0"
+          echo "Downloading ArgoCD Operator ${OPERATOR_VERSION}..."
+          curl -sL "https://github.com/argoproj-labs/argocd-operator/archive/refs/tags/${OPERATOR_VERSION}.tar.gz" -o argocd-operator.tar.gz
           
+          echo "Extracting archive..."
+          tar -xzf argocd-operator.tar.gz
+          cd argocd-operator-${OPERATOR_VERSION#v}
+          
+          echo "Deploying operator using kustomize..."
+          kubectl create namespace argocd || echo "Namespace argocd already exists"
+          kubectl apply -k config/default
+          
+          echo ""
+          echo "Waiting for operator to be ready..."
+          kubectl wait --for=condition=available --timeout=5m \
+            deployment/argocd-operator-controller-manager \
+            -n argocd-operator-system || {
+              echo "ERROR: Operator deployment failed to become ready"
+              echo "Deployment status:"
+              kubectl get deployment -n argocd-operator-system
+              echo ""
+              echo "Pod status:"
+              kubectl get pods -n argocd-operator-system
+              echo ""
+              echo "Pod logs:"
+              kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50
+              exit 1
+            }
+          
+          echo ""
           echo "Verifying operator installation..."
-          kubectl get pods -n argocd
-          kubectl get crd | grep argoproj || echo "ArgoCD CRDs installed"
+          kubectl get pods -n argocd-operator-system
+          
+          echo ""
+          echo "Checking ArgoCD CRDs..."
+          kubectl get crd | grep argoproj || {
+            echo "WARNING: ArgoCD CRDs not found"
+            kubectl get crd
+            exit 1
+          }
+          
+          echo ""
+          echo "=========================================="
+          echo "ArgoCD Operator installed successfully!"
+          echo "=========================================="
 
       - name: Deploy ArgoCD Instance
         run: |

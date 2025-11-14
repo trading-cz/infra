@@ -142,7 +142,7 @@ jobs:
           echo "Step 3: Waiting for K3s Control Plane Installation"
           echo "Checking for: /root/k3s-ready.txt"
           echo "=========================================="
-          for i in {1..60}; do
+          for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "test -f /root/k3s-ready.txt" 2>/dev/null; then
               echo "✅ K3s control plane ready (attempt $i)"
               echo ""
@@ -150,8 +150,8 @@ jobs:
               ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "tail -30 /var/log/cloud-init-output.log" || true
               break
             fi
-            echo "⏳ Attempt $i/60 - K3s not ready yet, retrying in 5s..."
-            if [ $i -eq 60 ]; then
+            echo "⏳ Attempt $i/30 - K3s not ready yet, retrying in 5s..."
+            if [ $i -eq 30 ]; then
               echo "❌ K3s control plane not ready after 5 minutes"
               echo ""
               echo "📋 Debugging Information:"
@@ -197,7 +197,7 @@ jobs:
           echo "Step 6: Waiting for Kafka Node to Join Cluster"
           echo "Checking for: /root/k3s-agent-ready.txt"
           echo "=========================================="
-          for i in {1..60}; do
+          for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null; then
               echo "✅ Kafka node joined cluster (attempt $i)"
               echo ""
@@ -205,8 +205,8 @@ jobs:
               ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "tail -30 /var/log/cloud-init-output.log" || true
               break
             fi
-            echo "⏳ Attempt $i/60 - Agent not ready yet, retrying in 5s..."
-            if [ $i -eq 60 ]; then
+            echo "⏳ Attempt $i/30 - Agent not ready yet, retrying in 5s..."
+            if [ $i -eq 30 ]; then
               echo "❌ Kafka node agent not ready after 5 minutes"
               echo ""
               echo "📋 Debugging Information:"
