@@ -370,18 +370,63 @@ jobs:
 
       - name: Get Kubeconfig
         id: get_kubeconfig
+        if: always() && steps.tf_output.outputs.control_ip != ''
         run: |
           CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          
+          echo "=========================================="
+          echo "Retrieving Kubeconfig from Control Plane"
+          echo "=========================================="
+          
           mkdir -p $HOME/.kube
-          ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > $HOME/.kube/config
+          
+          # Try to get kubeconfig with retries
+          for i in {1..5}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > $HOME/.kube/config 2>/dev/null; then
+              echo "✅ Kubeconfig retrieved (attempt $i)"
+              break
+            fi
+            echo "⏳ Attempt $i/5 failed, retrying in 5s..."
+            sleep 5
+            if [ $i -eq 5 ]; then
+              echo "❌ Failed to retrieve kubeconfig after 5 attempts"
+              exit 1
+            fi
+          done
+          
+          # Replace localhost with actual IP
           sed -i "s/127.0.0.1/$CONTROL_IP/g" $HOME/.kube/config
+          
+          echo "Kubeconfig file size: $(stat -c%s $HOME/.kube/config) bytes"
           echo "kubeconfig_path=$HOME/.kube/config" >> $GITHUB_OUTPUT
+          echo "✅ Kubeconfig prepared successfully"
 
       - name: Export Kubeconfig content
         id: export_kubeconfig
+        if: always() && steps.get_kubeconfig.outputs.kubeconfig_path != ''
         run: |
-          KUBECONFIG_CONTENT=$(cat ${{ steps.get_kubeconfig.outputs.kubeconfig_path }})
+          echo "=========================================="
+          echo "Exporting Kubeconfig for downstream jobs"
+          echo "=========================================="
+          
+          KUBECONFIG_PATH="${{ steps.get_kubeconfig.outputs.kubeconfig_path }}"
+          
+          if [ ! -f "$KUBECONFIG_PATH" ]; then
+            echo "❌ Kubeconfig file not found at: $KUBECONFIG_PATH"
+            exit 1
+          fi
+          
+          KUBECONFIG_CONTENT=$(cat "$KUBECONFIG_PATH")
+          
+          if [ -z "$KUBECONFIG_CONTENT" ]; then
+            echo "❌ Kubeconfig content is empty!"
+            exit 1
+          fi
+          
           # This is a trick to set a multiline output
           echo "kubeconfig<<EOF" >> $GITHUB_OUTPUT
           echo "$KUBECONFIG_CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "✅ Kubeconfig exported (${#KUBECONFIG_CONTENT} characters)"
+          echo "=========================================="

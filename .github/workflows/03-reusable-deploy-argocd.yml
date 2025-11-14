@@ -49,26 +49,57 @@ jobs:
 
       - name: Setup Kubeconfig
         run: |
-          mkdir -p ~/.kube
-          echo "${{ inputs.kubeconfig }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
+          echo "=========================================="
+          echo "Setting up Kubeconfig"
+          echo "=========================================="
           
-          echo "Verifying kubeconfig..."
-          if [ ! -s ~/.kube/config ]; then
-            echo "ERROR: Kubeconfig file is empty!"
+          mkdir -p ~/.kube
+          
+          # Check if kubeconfig input is empty BEFORE writing
+          if [ -z "${{ inputs.kubeconfig }}" ]; then
+            echo "❌ ERROR: Kubeconfig input is EMPTY!"
+            echo "This usually means:"
+            echo "  1. Workflow 01 (provision) failed before exporting kubeconfig"
+            echo "  2. The kubeconfig export step didn't run"
+            echo "  3. There's a dependency chain issue"
+            echo ""
+            echo "Debug: inputs.kubeconfig length: ${#KUBECONFIG_INPUT}"
             exit 1
           fi
           
+          echo "${{ inputs.kubeconfig }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+          echo "Verifying kubeconfig file..."
+          if [ ! -s ~/.kube/config ]; then
+            echo "❌ ERROR: Kubeconfig file is empty after writing!"
+            echo "File size: $(stat -c%s ~/.kube/config 2>/dev/null || echo 'unknown')"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(stat -c%s ~/.kube/config)
+          echo "✅ Kubeconfig file written (size: $FILE_SIZE bytes)"
+          
+          echo ""
+          echo "Kubeconfig structure (first 10 lines):"
+          head -n 10 ~/.kube/config
+          
+          echo ""
           echo "Testing cluster connection..."
           kubectl cluster-info || {
-            echo "ERROR: Cannot connect to cluster"
-            echo "Kubeconfig content (first 5 lines):"
-            head -n 5 ~/.kube/config
+            echo "❌ ERROR: Cannot connect to cluster"
+            echo ""
+            echo "Full kubeconfig content:"
+            cat ~/.kube/config
             exit 1
           }
           
-          echo "Cluster connection successful!"
+          echo ""
+          echo "✅ Cluster connection successful!"
           kubectl version --short
+          
+          echo ""
+          echo "=========================================="
 
       - name: Install ArgoCD Operator
         env:
