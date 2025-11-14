@@ -345,13 +345,153 @@ jobs:
           echo "Password: $ADMIN_PASSWORD"
           echo "=========================================="
 
-      - name: Verify ArgoCD Installation
+      - name: Verify ArgoCD UI Accessibility
         run: |
           echo "========================================"
-          echo "  ArgoCD Installation Summary"
+          echo "Verifying ArgoCD UI HTTP Accessibility"
           echo "========================================"
+          
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep trading-argocd-server | cut -d'/' -f2)
+          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+          
+          if [ -z "$NODEPORT" ]; then
+            NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
+          fi
+          
+          echo "ArgoCD Service: $ARGOCD_SERVICE"
+          echo "NodePort: $NODEPORT"
+          echo "Testing URL: http://$CONTROL_IP:$NODEPORT"
+          echo ""
+          
+          # Wait for service to be responsive
+          echo "Waiting for ArgoCD UI to respond..."
+          MAX_ATTEMPTS=12
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            if curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" | grep -q "200\|302\|401"; then
+              echo "✅ ArgoCD UI is accessible at http://$CONTROL_IP:$NODEPORT"
+              
+              # Try to get the actual page title
+              RESPONSE=$(curl -s --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" || echo "")
+              if echo "$RESPONSE" | grep -qi "argocd\|argo cd"; then
+                echo "✅ Confirmed ArgoCD UI page is being served"
+              else
+                echo "⚠️  Page accessible but content verification inconclusive"
+              fi
+              break
+            fi
+            
+            echo "⏳ Attempt $i/$MAX_ATTEMPTS: Waiting for UI to respond..."
+            sleep 5
+            
+            if [ $i -eq $MAX_ATTEMPTS ]; then
+              echo "❌ ArgoCD UI not accessible after $MAX_ATTEMPTS attempts"
+              echo ""
+              echo "Debugging information:"
+              echo "Service details:"
+              kubectl get svc $ARGOCD_SERVICE -n argocd -o wide
+              echo ""
+              echo "Pod status:"
+              kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server
+              echo ""
+              echo "Server logs (last 30 lines):"
+              kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server --tail=30 || true
+              exit 1
+            fi
+          done
+          
+          echo "========================================"
+
+      - name: Deploy Parent App-of-Apps
+        run: |
+          echo "========================================"
+          echo "Deploying Parent App-of-Apps"
+          echo "========================================"
+          
+          echo "Parent app configuration:"
+          cat config/app-of-apps/argocd/parent-app.yaml
+          echo ""
+          
+          echo "Deploying parent app 'trading-system'..."
+          kubectl apply -f config/app-of-apps/argocd/parent-app.yaml
+          
+          echo "✅ Parent app deployed"
+          echo ""
+          
+          echo "Waiting for parent app to sync..."
+          sleep 10
+          
+          # Check if parent app exists and its status
+          echo "Parent app status:"
+          kubectl get application trading-system -n argocd -o yaml || true
+          echo ""
+          
+          echo "Checking child applications..."
+          kubectl get applications -n argocd
+          echo ""
+          
+          echo "========================================"
+
+      - name: Verify ArgoCD Applications Sync
+        run: |
+          echo "========================================"
+          echo "Verifying ArgoCD Applications"
+          echo "========================================"
+          
+          # Wait for child applications to be created
+          echo "Waiting for child applications to be created by parent app..."
+          MAX_ATTEMPTS=12
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            APP_COUNT=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
+            if [ "$APP_COUNT" -ge 2 ]; then
+              echo "✅ Found $APP_COUNT applications (parent + children)"
+              break
+            fi
+            
+            echo "⏳ Attempt $i/$MAX_ATTEMPTS: Found $APP_COUNT applications, waiting for more..."
+            sleep 5
+            
+            if [ $i -eq $MAX_ATTEMPTS ]; then
+              echo "⚠️  Only found $APP_COUNT application(s) after waiting"
+              echo "This may be normal if no child apps are configured yet"
+            fi
+          done
+          
+          echo ""
+          echo "Current applications:"
+          kubectl get applications -n argocd -o wide
+          echo ""
+          
+          # Check sync status of each application
+          echo "Application sync status:"
+          for app in $(kubectl get applications -n argocd -o name); do
+            APP_NAME=$(echo $app | cut -d'/' -f2)
+            SYNC_STATUS=$(kubectl get $app -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            HEALTH_STATUS=$(kubectl get $app -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+            
+            echo "  $APP_NAME:"
+            echo "    Sync: $SYNC_STATUS"
+            echo "    Health: $HEALTH_STATUS"
+          done
+          
+          echo ""
+          echo "========================================"
+
+      - name: Verify ArgoCD Installation
+        run: |
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep trading-argocd-server | cut -d'/' -f2)
+          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+          
+          if [ -z "$NODEPORT" ]; then
+            NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
+          fi
+          
+          echo "=========================================="
+          echo "  ArgoCD Installation Summary"
+          echo "=========================================="
           echo "Namespace: argocd"
-          echo "ArgoCD UI: http://${{ inputs.control_plane_ip }}"
+          echo "ArgoCD UI: http://$CONTROL_IP:$NODEPORT"
           echo "Username: admin"
           echo ""
           echo "Pods:"
@@ -359,5 +499,8 @@ jobs:
           echo ""
           echo "Services:"
           kubectl get svc -n argocd
-          echo "========================================"
+          echo ""
+          echo "Applications:"
+          kubectl get applications -n argocd
+          echo "=========================================="
 
