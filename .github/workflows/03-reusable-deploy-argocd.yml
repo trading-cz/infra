@@ -66,11 +66,10 @@ jobs:
           
           echo "Extracting archive..."
           tar -xzf argocd-operator.tar.gz
-          cd argocd-operator-${OPERATOR_VERSION#v}
           
           echo "Deploying operator using kustomize..."
           kubectl create namespace argocd || echo "Namespace argocd already exists"
-          kubectl apply -k config/default
+          kubectl apply -k argocd-operator-${OPERATOR_VERSION#v}/config/default
           
           echo ""
           echo "Waiting for operator to be ready..."
