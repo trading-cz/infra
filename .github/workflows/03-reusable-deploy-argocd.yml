@@ -11,14 +11,13 @@ on:
         description: 'Control Plane IP'
         required: true
         type: string
+    secrets:
       argocd_admin_password:
         description: 'ArgoCD admin password'
         required: false
-        type: string
       token_git_repo_config:
         description: 'Token for config repo'
         required: true
-        type: string
 
 jobs:
   deploy:
@@ -62,7 +61,7 @@ jobs:
         working-directory: infra
         continue-on-error: true
         run: |
-          if curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${{ inputs.token_git_repo_config }}" \
+          if curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${{ secrets.token_git_repo_config }}" \
              https://api.github.com/repos/trading-cz/config | grep -q "200"; then
             echo "✅ Config repository is accessible"
           else
@@ -82,16 +81,16 @@ jobs:
           stringData:
             type: git
             url: https://github.com/trading-cz/config.git
-            password: ${{ inputs.token_git_repo_config }}
+            password: ${{ secrets.token_git_repo_config }}
             username: not-used
           EOF
           
           kubectl apply -f modules/argocd-bootstrap/parent-app.yaml
           kubectl apply -f modules/argocd-bootstrap/argocd-ingress.yaml
           
-          if [ -n "${{ inputs.argocd_admin_password }}" ]; then
+          if [ -n "${{ secrets.argocd_admin_password }}" ]; then
             python3 -m pip install bcrypt --quiet
-            BCRYPT_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw('${{ inputs.argocd_admin_password }}'.encode('utf-8'), bcrypt.gensalt(rounds=10)).decode('utf-8'))")
+            BCRYPT_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw('${{ secrets.argocd_admin_password }}'.encode('utf-8'), bcrypt.gensalt(rounds=10)).decode('utf-8'))")
             kubectl delete secret argocd-initial-admin-secret -n argocd 2>/dev/null || true
             kubectl patch secret argocd-secret -n argocd --type merge \
               -p "{\"stringData\": {\"admin.password\": \"$BCRYPT_HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
