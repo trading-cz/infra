@@ -348,6 +348,44 @@ jobs:
           echo "📊 Node Status:"
           echo "   Total nodes: $NODE_COUNT"
           echo "   Ready nodes: $READY_COUNT"
+
+      - name: Check cluster age and wait if needed for initialization
+        id: cluster_age
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "⏱️  Checking cluster initialization status..."
+          
+          # Get cluster creation time from kube-system namespace age
+          KUBE_SYSTEM_AGE=$(kubectl get ns kube-system -o jsonpath='{.metadata.creationTimestamp}')
+          
+          # Convert to Unix timestamp
+          CREATION_TIMESTAMP=$(date -d "$KUBE_SYSTEM_AGE" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$KUBE_SYSTEM_AGE" +%s 2>/dev/null)
+          CURRENT_TIMESTAMP=$(date +%s)
+          CLUSTER_AGE_SECONDS=$((CURRENT_TIMESTAMP - CREATION_TIMESTAMP))
+          CLUSTER_AGE_MINUTES=$((CLUSTER_AGE_SECONDS / 60))
+          
+          echo "📊 Cluster age: $CLUSTER_AGE_MINUTES minutes ($CLUSTER_AGE_SECONDS seconds)"
+          echo "cluster_age_minutes=$CLUSTER_AGE_MINUTES" >> $GITHUB_OUTPUT
+          
+          # If cluster is less than 5 minutes old, wait for initialization
+          if [ "$CLUSTER_AGE_MINUTES" -lt 5 ]; then
+            WAIT_TIME=$((5 - CLUSTER_AGE_MINUTES))
+            echo ""
+            echo "⏳ Cluster is still initializing (${CLUSTER_AGE_MINUTES}m old)"
+            echo "   Waiting ${WAIT_TIME} more minutes for:"
+            echo "   - ArgoCD to fully start (health checks responsive)"
+            echo "   - Strimzi operator to process Kafka CRD"
+            echo "   - Kafka brokers to initialize"
+            echo "   - Services to become accessible"
+            echo ""
+            echo "⏳ Sleeping for ${WAIT_TIME} minute(s)..."
+            sleep $((WAIT_TIME * 60))
+            echo "✅ Wait complete, resuming verification..."
+          else
+            echo "✅ Cluster is mature (${CLUSTER_AGE_MINUTES}m old), proceeding with full verification"
+          fi
           
           if [ "$READY_COUNT" -ge 1 ]; then
             echo "✅ At least one node is Ready"
@@ -428,6 +466,7 @@ jobs:
         continue-on-error: true
         run: |
           export KUBECONFIG=$PWD/kubeconfig.yaml
+          CLUSTER_AGE="${{ steps.cluster_age.outputs.cluster_age_minutes }}"
           
           echo "🔍 Checking ArgoCD server service..."
           
@@ -450,11 +489,11 @@ jobs:
           sleep 3
           
           if curl -k -s -m 5 https://localhost:8080/healthz > /tmp/argocd_health.log 2>&1; then
-            echo "✅ ArgoCD health endpoint responsive"
+            echo "✅ ArgoCD health endpoint responsive (cluster age: ${CLUSTER_AGE}m)"
             cat /tmp/argocd_health.log
             echo "status=pass" >> $GITHUB_OUTPUT
           else
-            echo "⚠️  ArgoCD health endpoint not responding (may still be starting)"
+            echo "⚠️  ArgoCD health endpoint not responding (cluster age: ${CLUSTER_AGE}m, may still be starting)"
             echo "status=partial" >> $GITHUB_OUTPUT
           fi
           
