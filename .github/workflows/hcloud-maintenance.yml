@@ -16,12 +16,9 @@ on:
         type: choice
         options: [list, destroy-cluster, destroy-all]
   schedule:
-    # TEST: Runs at 21:15 UTC (22:15 CET) daily
-    - cron: '15 21 * * *'
-    # Runs at 22:00 UTC (23:00 CET) daily
-    - cron: '0 22 * * *'
-    # Runs at 01:00 UTC (02:00 CET) daily
-    - cron: '0 1 * * *'
+    # Runs every hour at 55 minutes past
+    - cron: '40 * * * *'
+
 
 jobs:
   hcloud:
