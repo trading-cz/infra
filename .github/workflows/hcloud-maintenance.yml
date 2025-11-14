@@ -16,8 +16,7 @@ on:
         type: choice
         options: [list, destroy-cluster, destroy-all]
   schedule:
-    # Runs every hour at 55 minutes past
-    - cron: '40 * * * *'
+    - cron: '30 23 * * *'
 
 
 jobs:
