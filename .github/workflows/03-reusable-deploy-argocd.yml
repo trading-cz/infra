@@ -141,7 +141,12 @@ jobs:
           kubectl create namespace argocd 2>/dev/null || echo "Namespace argocd already exists"
           kubectl create namespace argocd-operator-system 2>/dev/null || echo "Namespace argocd-operator-system already exists"
           
-          kubectl apply -k argocd-operator-${OPERATOR_VERSION#v}/config/default
+          # Use kubectl create instead of apply to avoid CRD annotation size issues
+          echo "Installing operator manifests..."
+          kubectl kustomize argocd-operator-${OPERATOR_VERSION#v}/config/default | kubectl create -f - || {
+            echo "⚠️  Some resources already exist, updating them..."
+            kubectl kustomize argocd-operator-${OPERATOR_VERSION#v}/config/default | kubectl apply -f - --server-side=true --force-conflicts
+          }
           
           echo ""
           echo "Waiting for operator to be ready..."
