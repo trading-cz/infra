@@ -23,8 +23,16 @@ jobs:
       # ============================================
       # Setup
       # ============================================
-      - name: Checkout repository
+      - name: Checkout Infra Repository
         uses: actions/checkout@v4
+        with:
+          path: infra
+
+      - name: Checkout Config Repository
+        uses: actions/checkout@v4
+        with:
+          repository: trading-cz/config
+          path: config
 
       - name: Setup Terraform ${{ env.TF_VERSION }}
         uses: hashicorp/setup-terraform@v3
@@ -103,9 +111,11 @@ jobs:
       # Terraform - Infrastructure Provisioning
       # ============================================
       - name: Terraform Init
+        working-directory: infra
         run: terraform init
 
       - name: Terraform Plan
+        working-directory: infra
         run: terraform plan -var-file="environments/${{ inputs.environment }}.tfvars" -out=tfplan
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
@@ -114,6 +124,7 @@ jobs:
           TF_VAR_kafka_primary_ip_id: ${{ steps.primary_ips.outputs.kafka_primary_ip_id }}
 
       - name: Terraform Apply
+        working-directory: infra
         run: terraform apply -auto-approve tfplan
         env:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
@@ -123,6 +134,7 @@ jobs:
 
       - name: Extract Terraform Outputs
         id: tf_output
+        working-directory: infra
         run: |
           CONTROL_IP=$(terraform output -raw k3s_control_public_ip)
           KAFKA_IP=$(terraform output -json kafka_server_public_ips | jq -r '.[0]')
@@ -538,178 +550,6 @@ jobs:
           echo ""
           echo "Helm repositories:"
           ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "helm repo list" 2>/dev/null || echo "No repositories configured"
-
-      # ============================================
-      # Deploy Kafka Broker Cluster
-      # ============================================
-      - name: Deploy Kafka Broker via Strimzi
-        id: deploy_kafka
-        run: |
-          export KUBECONFIG=$PWD/kubeconfig.yaml
-          
-          echo "📦 Deploying Kafka cluster via Strimzi Operator..."
-          
-          # This path assumes the config repo is checked out at the same level as the infra repo.
-          # In a real CI/CD, you might need to check out the config repo separately.
-          # For now, we reference it directly.
-          KAFKA_MANIFEST_PATH="../../config/base/kafka/kafka-cluster.yaml"
-
-          if [ ! -f "$KAFKA_MANIFEST_PATH" ]; then
-              echo "❌ Kafka manifest not found at $KAFKA_MANIFEST_PATH"
-              echo "Please ensure the 'config' repository is checked out alongside the 'infra' repository."
-              exit 1
-          fi
-
-          echo "Applying Kafka manifest from: $KAFKA_MANIFEST_PATH"
-          kubectl apply -f "$KAFKA_MANIFEST_PATH" -n kafka
-
-          echo "⏳ Waiting for Kafka broker to be ready (max 10 minutes)..."
-          
-          # Wait for the Kafka resource to have a status condition of Ready. This is the most reliable check.
-          if ! kubectl wait kafka/trading-cluster --for=condition=Ready --timeout=10m -n kafka; then
-              echo "⚠️ Kafka cluster did not reach 'Ready' condition after 10 minutes."
-              
-              echo ""
-              echo "🔍 Retrieving diagnostic information..."
-              
-              echo "========================================"
-              echo "Strimzi Operator Logs (last 200 lines):"
-              echo "========================================"
-              kubectl logs -n kafka -l strimzi.io/kind=cluster-operator --tail=200 || echo "Could not retrieve operator logs."
-
-              echo ""
-              echo "========================================"
-              echo "Kafka Custom Resource (YAML):"
-              echo "========================================"
-              kubectl get kafka trading-cluster -n kafka -o yaml || echo "Could not retrieve Kafka CR."
-              
-              echo ""
-              echo "========================================"
-              echo "Kafka-related Events:"
-              echo "========================================"
-              kubectl get events -n kafka --field-selector involvedObject.kind=Kafka || echo "No Kafka events found."
-
-              echo ""
-              echo "========================================"
-              echo "All Pods in 'kafka' namespace:"
-              echo "========================================"
-              kubectl get pods -n kafka -o wide || echo "Could not list pods in kafka namespace."
-
-              exit 1
-          fi
-          
-          echo "✅ Kafka cluster is Ready."
-          
-          echo "📊 Kafka Cluster Status:"
-          kubectl get kafka -n kafka
-          
-          echo "📊 Kafka Broker Pods:"
-          kubectl get pods -n kafka -l strimzi.io/cluster=trading-cluster
-          
-          echo "📊 Kafka Services:"
-          kubectl get svc -n kafka -l strimzi.io/cluster=trading-cluster
-
-      - name: Verify Kafka NodePort Accessibility
-        id: verify_kafka_nodeport
-        continue-on-error: true
-        run: |
-          export KUBECONFIG=$PWD/kubeconfig.yaml
-          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
-          
-          echo "🔍 Verifying Kafka external access..."
-          echo "   Target: $KAFKA_IP:33333 (external bootstrap)"
-          
-          # Wait a bit for services to stabilize
-          sleep 10
-          
-          echo ""
-          echo "📊 Kafka Bootstrap Service:"
-          kubectl get svc -n kafka -o wide | grep bootstrap || echo "Bootstrap service not found"
-          
-          echo ""
-          echo "📊 Kafka NodePort Details:"
-          BOOTSTRAP_SVC=$(kubectl get svc -n kafka -o name 2>/dev/null | grep bootstrap | head -1)
-          if [ -n "$BOOTSTRAP_SVC" ]; then
-            kubectl describe $BOOTSTRAP_SVC -n kafka
-            
-            # Extract actual NodePort
-            NODEPORT=$(kubectl get $BOOTSTRAP_SVC -n kafka -o jsonpath='{.spec.ports[?(@.name=="external")].nodePort}' 2>/dev/null)
-            if [ -z "$NODEPORT" ] || [ "$NODEPORT" == "null" ]; then
-              NODEPORT=$(kubectl get $BOOTSTRAP_SVC -n kafka -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)
-            fi
-            
-            if [ -n "$NODEPORT" ] && [ "$NODEPORT" != "null" ]; then
-              echo ""
-              echo "✅ NodePort extracted: $NODEPORT"
-              echo "   Access: $KAFKA_IP:$NODEPORT"
-              
-              # Try to connect (timeout if not ready)
-              echo ""
-              echo "Testing connectivity to Kafka bootstrap..."
-              if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/$NODEPORT" 2>/dev/null; then
-                echo "✅ Kafka NodePort $NODEPORT is accessible from internet"
-                echo "status=pass" >> $GITHUB_OUTPUT
-              else
-                echo "⚠️  Kafka NodePort $NODEPORT not responding yet (broker may still be initializing)"
-                echo "status=partial" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "⚠️  Could not extract NodePort from service"
-              echo "status=fail" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "⚠️  Bootstrap service not found"
-            echo "status=fail" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Display cluster information
-        run: |
-          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
-          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
-          export KUBECONFIG=$PWD/kubeconfig.yaml
-          
-          echo ""
-          echo "========================================"
-          echo "  Cluster Deployment Summary"
-          echo "========================================"
-          echo ""
-          echo "Environment: ${{ inputs.environment }}"
-          echo "Control Plane IP: $CONTROL_IP"
-          echo "Kafka Node IP: $KAFKA_IP"
-          echo ""
-          echo "Nodes:"
-          kubectl get nodes -o wide
-          echo ""
-          echo "Namespaces:"
-          kubectl get namespaces
-          echo ""
-          echo "All Pods:"
-          kubectl get pods -A
-          echo ""
-          echo "========================================"
-          echo "  Access Information"
-          echo "========================================"
-          echo ""
-          echo "Kubeconfig: Download artifact 'kubeconfig-${{ inputs.environment }}'"
-          echo ""
-          echo "SSH Access:"
-          echo "  Control Plane: ssh root@$CONTROL_IP"
-          echo "  Kafka Node: ssh root@$KAFKA_IP"
-          echo ""
-          echo "ArgoCD:"
-          echo "  Get password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
-          echo "  Access via kubectl port-forward: kubectl port-forward svc/argocd-server -n argocd 8080:443"
-          echo ""
-          echo "Strimzi Kafka Operator:"
-          echo "  Version: 0.48.0 (Kafka 4.1.0 KRaft support)"
-          echo "  Kafka Broker: deployed via Strimzi KafkaCR"
-          echo ""
-          echo "Kafka Access:"
-          echo "  External (from internet): $KAFKA_IP:33333"
-          echo "  Internal (from pods): trading-cluster-kafka-bootstrap.kafka:9092"
-          echo "  Check status: kubectl get kafka -n kafka && kubectl get pods -n kafka"
-          echo ""
-          echo "========================================"
 
       # ============================================
       # Upload kubeconfig artifact
