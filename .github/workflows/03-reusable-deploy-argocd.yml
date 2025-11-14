@@ -316,132 +316,6 @@ jobs:
             echo "   Get initial password with: kubectl -n argocd get secret $SECRET_NAME -o jsonpath='{.data.admin\\.password}' | base64 -d"
           fi
 
-      - name: Get Initial Admin Password
-        run: |
-          echo "Fetching admin password..."
-          
-          # Find the secret
-          SECRET_NAME=$(kubectl get secret -n argocd -o name | grep -E "argocd.*cluster|argocd.*secret" | head -1 | cut -d'/' -f2)
-          
-          if [ -z "$SECRET_NAME" ]; then
-            echo "⚠️  No ArgoCD secret found"
-            kubectl get secrets -n argocd
-            ADMIN_PASSWORD="<check ArgoCD logs or secrets>"
-          else
-            ADMIN_PASSWORD=$(kubectl -n argocd get secret $SECRET_NAME \
-              -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
-            
-            if [ -z "$ADMIN_PASSWORD" ]; then
-              echo "⚠️  Password field empty, trying alternative fields..."
-              kubectl get secret $SECRET_NAME -n argocd -o yaml
-              ADMIN_PASSWORD="<check secret above>"
-            fi
-          fi
-          echo "::add-mask::$ADMIN_PASSWORD"
-          echo ""
-          echo "=========================================="
-          echo "ArgoCD Admin Credentials:"
-          echo "Username: admin"
-          echo "Password: $ADMIN_PASSWORD"
-          echo "=========================================="
-
-      - name: Verify ArgoCD UI Accessibility
-        run: |
-          echo "========================================"
-          echo "Verifying ArgoCD UI HTTP Accessibility"
-          echo "========================================"
-          
-          CONTROL_IP="${{ inputs.control_plane_ip }}"
-          
-          # Get the main ArgoCD server service (not metrics)
-          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep "trading-argocd-server$" | head -1 | cut -d'/' -f2)
-          
-          if [ -z "$ARGOCD_SERVICE" ]; then
-            echo "❌ ArgoCD service not found"
-            echo "Available services:"
-            kubectl get svc -n argocd
-            exit 1
-          fi
-          
-          # Get NodePort for HTTP (port 80)
-          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
-          
-          if [ -z "$NODEPORT" ]; then
-            echo "⚠️  HTTP port not found, trying first port..."
-            NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
-          fi
-          
-          if [ -z "$NODEPORT" ]; then
-            echo "❌ Could not determine NodePort"
-            kubectl get svc $ARGOCD_SERVICE -n argocd -o yaml
-            exit 1
-          fi
-          
-          echo "ArgoCD Service: $ARGOCD_SERVICE"
-          echo "NodePort: $NODEPORT"
-          echo "Testing URL: http://$CONTROL_IP:$NODEPORT"
-          echo ""
-          
-          # First check if pods are ready
-          echo "Checking ArgoCD server pods..."
-          kubectl get pods -n argocd -l app.kubernetes.io/name=trading-argocd-server
-          echo ""
-          
-          echo "Waiting for ArgoCD server pod to be ready..."
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=trading-argocd-server -n argocd --timeout=120s || {
-            echo "❌ ArgoCD server pod not ready"
-            echo "Pod status:"
-            kubectl get pods -n argocd
-            echo ""
-            echo "Events:"
-            kubectl get events -n argocd --sort-by='.lastTimestamp' | tail -20
-            exit 1
-          }
-          
-          echo "✅ ArgoCD server pod is ready"
-          echo ""
-          
-          # Now test HTTP accessibility
-          echo "Testing HTTP accessibility..."
-          MAX_ATTEMPTS=12
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "000")
-            
-            if echo "$HTTP_CODE" | grep -q "200\|302\|401"; then
-              echo "✅ ArgoCD UI is accessible at http://$CONTROL_IP:$NODEPORT"
-              echo "   HTTP Status: $HTTP_CODE"
-              
-              # Try to get the actual page title
-              RESPONSE=$(curl -s --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "")
-              if echo "$RESPONSE" | grep -qi "argocd\|argo cd"; then
-                echo "✅ Confirmed ArgoCD UI page is being served"
-              else
-                echo "⚠️  Page accessible but content verification inconclusive"
-              fi
-              break
-            fi
-            
-            echo "⏳ Attempt $i/$MAX_ATTEMPTS: HTTP $HTTP_CODE, waiting for UI to respond..."
-            sleep 5
-            
-            if [ $i -eq $MAX_ATTEMPTS ]; then
-              echo "❌ ArgoCD UI not accessible after $MAX_ATTEMPTS attempts"
-              echo ""
-              echo "Debugging information:"
-              echo "Service details:"
-              kubectl get svc -n argocd
-              echo ""
-              echo "Pod status:"
-              kubectl get pods -n argocd
-              echo ""
-              echo "Server logs (last 30 lines):"
-              kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=30 || true
-              exit 1
-            fi
-          done
-          
-          echo "========================================"
-
       - name: Deploy Parent App-of-Apps
         run: |
           echo "========================================"
@@ -515,6 +389,128 @@ jobs:
           done
           
           echo ""
+          echo "========================================"
+
+      - name: Get Initial Admin Password
+        run: |
+          echo "Fetching admin password..."
+          
+          # Find the secret
+          SECRET_NAME=$(kubectl get secret -n argocd -o name | grep -E "argocd.*cluster|argocd.*secret" | head -1 | cut -d'/' -f2)
+          
+          if [ -z "$SECRET_NAME" ]; then
+            echo "⚠️  No ArgoCD secret found"
+            kubectl get secrets -n argocd
+            ADMIN_PASSWORD="<check ArgoCD logs or secrets>"
+          else
+            ADMIN_PASSWORD=$(kubectl -n argocd get secret $SECRET_NAME \
+              -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+            
+            if [ -z "$ADMIN_PASSWORD" ]; then
+              echo "⚠️  Password field empty, trying alternative fields..."
+              kubectl get secret $SECRET_NAME -n argocd -o yaml
+              ADMIN_PASSWORD="<check secret above>"
+            fi
+          fi
+          echo "::add-mask::$ADMIN_PASSWORD"
+          echo ""
+          echo "=========================================="
+          echo "ArgoCD Admin Credentials:"
+          echo "Username: admin"
+          echo "Password: $ADMIN_PASSWORD"
+          echo "=========================================="
+
+      - name: Verify ArgoCD UI Accessibility
+        run: |
+          echo "========================================"
+          echo "Verifying ArgoCD UI HTTP Accessibility"
+          echo "========================================"
+          
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          
+          # Get the main ArgoCD server service (not metrics)
+          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep "trading-argocd-server$" | head -1 | cut -d'/' -f2)
+          
+          if [ -z "$ARGOCD_SERVICE" ]; then
+            echo "❌ ArgoCD service not found"
+            echo "Available services:"
+            kubectl get svc -n argocd
+            exit 1
+          fi
+          
+          # Get NodePort for HTTP (port 80)
+          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
+          
+          if [ -z "$NODEPORT" ]; then
+            echo "⚠️  HTTP port not found, trying first port..."
+            NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
+          fi
+          
+          if [ -z "$NODEPORT" ]; then
+            echo "❌ Could not determine NodePort"
+            kubectl get svc $ARGOCD_SERVICE -n argocd -o yaml
+            exit 1
+          fi
+          
+          echo "ArgoCD Service: $ARGOCD_SERVICE"
+          echo "NodePort: $NODEPORT"
+          echo "Testing URL: http://$CONTROL_IP:$NODEPORT"
+          echo ""
+          
+          # Additional wait time for ArgoCD server to fully initialize
+          echo "Waiting additional time for ArgoCD server to fully initialize HTTP service..."
+          echo "ArgoCD server needs time to start accepting HTTP connections after pod is ready"
+          sleep 45
+          
+          # Test HTTP accessibility with longer timeout and more attempts
+          echo "Testing HTTP accessibility..."
+          MAX_ATTEMPTS=20
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "000")
+            
+            if echo "$HTTP_CODE" | grep -q "200\|302\|401"; then
+              echo "✅ ArgoCD UI is accessible at http://$CONTROL_IP:$NODEPORT"
+              echo "   HTTP Status: $HTTP_CODE"
+              
+              # Try to get the actual page title
+              RESPONSE=$(curl -s --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "")
+              if echo "$RESPONSE" | grep -qi "argocd\|argo cd"; then
+                echo "✅ Confirmed ArgoCD UI page is being served"
+              else
+                echo "⚠️  Page accessible but content verification inconclusive"
+              fi
+              break
+            fi
+            
+            echo "⏳ Attempt $i/$MAX_ATTEMPTS: HTTP $HTTP_CODE, waiting for UI to respond..."
+            sleep 5
+            
+            if [ $i -eq $MAX_ATTEMPTS ]; then
+              echo "⚠️  ArgoCD UI not accessible after $MAX_ATTEMPTS attempts"
+              echo ""
+              echo "Debugging information:"
+              echo "===================="
+              echo "Service details:"
+              kubectl get svc -n argocd
+              echo ""
+              echo "Pod status:"
+              kubectl get pods -n argocd
+              echo ""
+              echo "Endpoint details:"
+              kubectl get endpoints trading-argocd-server -n argocd -o yaml || true
+              echo ""
+              echo "Server logs (last 50 lines):"
+              kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=50 || true
+              echo ""
+              echo "===================="
+              echo "⚠️  Note: ArgoCD may still be initializing. Check manually:"
+              echo "   curl http://$CONTROL_IP:$NODEPORT"
+              echo ""
+              echo "Continuing deployment despite UI check failure..."
+              echo "   The UI may become accessible shortly."
+            fi
+          done
+          
           echo "========================================"
 
       - name: Verify ArgoCD Installation

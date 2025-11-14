@@ -176,7 +176,9 @@ jobs:
               echo "Current kafka namespace resources:"
               kubectl get all -n kafka
               echo ""
-              echo "Check ArgoCD UI for kafka-cluster app status"
+              echo "⚠️  Continuing without Kafka cluster verification"
+              echo "    Check ArgoCD UI for kafka-cluster app status"
+              echo "========================================"
               exit 0  # Don't fail, as this might still be syncing
             fi
           done
