@@ -11,6 +11,10 @@ on:
         description: 'Control Plane IP'
         required: true
         type: string
+      environment:
+        description: 'Deployment environment (dev|prod)'
+        required: true
+        type: string
     secrets:
       argocd_admin_password:
         description: 'ArgoCD admin password'
@@ -29,6 +33,14 @@ jobs:
         with:
           path: infra
 
+      - name: Checkout Config Repository
+        uses: actions/checkout@v4
+        with:
+          repository: trading-cz/config
+          ref: main
+          path: config
+          token: ${{ secrets.token_git_repo_config }}
+
       - name: Install kubectl
         run: |
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
@@ -40,35 +52,38 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ inputs.kubeconfig }}" > ~/.kube/config
 
-      - name: Verify ArgoCD is installed
+      - name: Wait for Argo CD operator readiness
         run: |
-          if kubectl get namespace argocd 2>/dev/null; then
-            echo "✅ ArgoCD namespace exists"
-          else
-            echo "❌ ArgoCD namespace not found, it should have been installed by cloud-init"
+          if ! kubectl wait --for=condition=Available deployment/argocd-operator-controller-manager -n argocd --timeout=600s; then
+            echo "❌ Argo CD operator not ready"
+            kubectl get pods -n argocd || true
             exit 1
           fi
-          
-          echo "Waiting for ArgoCD pods to be ready..."
-          if ! kubectl wait --for=condition=ready pod --all -n argocd --timeout=300s; then
-            echo "❌ ArgoCD pods not ready after 5 minutes"
-            kubectl describe pods -n argocd
+
+      - name: Apply Argo CD custom resource
+        working-directory: config
+        run: |
+          OVERLAY_PATH="overlays/${{ inputs.environment }}/operators/argocd"
+          if [ ! -d "$OVERLAY_PATH" ]; then
+            echo "❌ Overlay path $OVERLAY_PATH not found"
+            ls overlays/*/operators || true
             exit 1
           fi
-          echo "✅ ArgoCD is running"
+          kubectl apply -k "$OVERLAY_PATH"
+
+      - name: Wait for Argo CD control plane
+        run: |
+          set -e
+          COMPONENTS=(application-controller repo-server server)
+          for component in "${COMPONENTS[@]}"; do
+            kubectl rollout status deployment/trading-argocd-${component} -n argocd --timeout=600s
+          done
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/part-of=argocd -n argocd --timeout=600s
 
       - name: Bootstrap ArgoCD - Connect to config repository
-        working-directory: infra
+        working-directory: config
         continue-on-error: true
         run: |
-          if curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${{ secrets.token_git_repo_config }}" \
-             https://api.github.com/repos/trading-cz/config | grep -q "200"; then
-            echo "✅ Config repository is accessible"
-          else
-            echo "⚠️ Config repository not found or not accessible. Skipping bootstrap."
-            exit 0
-          fi
-          
           cat <<EOF | kubectl apply -f -
           apiVersion: v1
           kind: Secret
@@ -85,8 +100,11 @@ jobs:
             username: not-used
           EOF
           
-          kubectl apply -f modules/argocd-bootstrap/parent-app.yaml
-          kubectl apply -f modules/argocd-bootstrap/argocd-ingress.yaml
+          kubectl apply -f app-of-apps/argocd/parent-app.yaml
+
+      - name: Apply ArgoCD ingress
+        run: |
+          kubectl apply -f infra/modules/argocd-bootstrap/argocd-ingress.yaml
           
           if [ -n "${{ secrets.argocd_admin_password }}" ]; then
             python3 -m pip install bcrypt --quiet
