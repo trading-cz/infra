@@ -466,18 +466,24 @@ jobs:
           
           # Test HTTP accessibility via port 80 (Traefik)
           echo "Testing HTTP accessibility via Traefik (port 80)..."
+          
+          # Extract hostname from deployed ArgoCD CR
+          ARGOCD_HOST=$(kubectl get argocd trading-argocd -n argocd -o jsonpath='{.spec.server.host}' 2>/dev/null || echo "argocd.dev.trading.local")
+          echo "📍 Using hostname from ArgoCD CR: ${ARGOCD_HOST}"
+          echo ""
+          
           MAX_ATTEMPTS=15
           for i in $(seq 1 $MAX_ATTEMPTS); do
-            # Test with Host header
+            # Test with Host header from ArgoCD CR
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
-              -H "Host: argocd.dev.trading.local" \
+              -H "Host: ${ARGOCD_HOST}" \
               "http://$CONTROL_IP" 2>/dev/null || echo "000")
             
             if echo "$HTTP_CODE" | grep -q "200\|302\|307\|308"; then
               echo "✅ ArgoCD UI is accessible via Traefik Ingress"
               echo "   HTTP Status: $HTTP_CODE"
-              echo "   Access via: http://$CONTROL_IP (with Host: argocd.dev.trading.local)"
-              echo "   Or add to /etc/hosts: $CONTROL_IP argocd.dev.trading.local"
+              echo "   Access via: http://$CONTROL_IP (with Host: ${ARGOCD_HOST})"
+              echo "   Or add to /etc/hosts: $CONTROL_IP ${ARGOCD_HOST}"
               break
             fi
             
@@ -503,7 +509,7 @@ jobs:
               echo ""
               echo "===================="
               echo "⚠️  Manual verification:"
-              echo "   curl -H 'Host: argocd.dev.trading.local' http://$CONTROL_IP"
+              echo "   curl -H 'Host: ${ARGOCD_HOST}' http://$CONTROL_IP"
               echo ""
               echo "Continuing deployment..."
             fi

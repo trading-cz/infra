@@ -131,30 +131,54 @@ jobs:
           echo "Verifying Kafka Cluster Deployment"
           echo "========================================"
           
+          # Check parent app first
+          echo "1. Checking Parent App (trading-system)..."
+          if kubectl get application trading-system -n argocd 2>/dev/null >/dev/null; then
+            PARENT_SYNC=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            PARENT_HEALTH=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+            
+            echo "   Parent App Status:"
+            echo "   - Sync: $PARENT_SYNC"
+            echo "   - Health: $PARENT_HEALTH"
+            
+            if [ "$PARENT_SYNC" != "Synced" ]; then
+              echo "   ⚠️  Parent app not synced yet, child apps may not be created"
+              echo ""
+              echo "   Parent App Details:"
+              kubectl get application trading-system -n argocd -o jsonpath='{.status.conditions}' 2>/dev/null | jq '.' 2>/dev/null || echo "   No conditions"
+            fi
+          else
+            echo "   ❌ Parent app 'trading-system' not found!"
+          fi
+          echo ""
+          
           # Check if kafka-cluster ArgoCD app exists and is syncing
-          echo "Checking for kafka-cluster ArgoCD application..."
+          echo "2. Checking kafka-cluster ArgoCD application..."
           if kubectl get application kafka-cluster -n argocd 2>/dev/null; then
-            echo "✅ Kafka-cluster ArgoCD application exists"
+            echo "   ✅ kafka-cluster ArgoCD application exists"
             
             SYNC_STATUS=$(kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
             HEALTH_STATUS=$(kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
             
-            echo "  Sync Status: $SYNC_STATUS"
-            echo "  Health Status: $HEALTH_STATUS"
+            echo "   - Sync Status: $SYNC_STATUS"
+            echo "   - Health Status: $HEALTH_STATUS"
             
             if [ "$SYNC_STATUS" != "Synced" ]; then
-              echo "⚠️  Application not yet synced, waiting..."
+              echo "   ⚠️  Application not yet synced"
+              echo ""
+              echo "   Sync Conditions:"
+              kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.conditions}' 2>/dev/null | jq '.' 2>/dev/null || echo "   No conditions"
             fi
           else
-            echo "⚠️  kafka-cluster ArgoCD application not found yet"
-            echo "     This should be created by the parent app-of-apps"
+            echo "   ⚠️  kafka-cluster ArgoCD application not found yet"
+            echo "      This should be created by the parent app-of-apps"
             echo ""
-            echo "Available applications:"
-            kubectl get applications -n argocd
+            echo "   All Available Applications:"
+            kubectl get applications -n argocd -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,MESSAGE:.status.conditions[0].message
           fi
           
           echo ""
-          echo "Checking for Kafka cluster CR..."
+          echo "3. Checking for Kafka cluster CR..."
           # Wait for Kafka CR to be created
           MAX_ATTEMPTS=24
           for i in $(seq 1 $MAX_ATTEMPTS); do
@@ -164,17 +188,109 @@ jobs:
             fi
             
             echo "⏳ Attempt $i/$MAX_ATTEMPTS: Waiting for Kafka cluster to be created..."
+            
+            # Show diagnostic info every 6 attempts (30 seconds)
+            if [ $((i % 6)) -eq 0 ]; then
+              echo ""
+              echo "🔍 Diagnostic Info (Attempt $i/$MAX_ATTEMPTS):"
+              echo "-------------------------------------------"
+              
+              # Check parent app status
+              echo "1. Parent App (trading-system) Status:"
+              kubectl get application trading-system -n argocd -o jsonpath='{.status}' 2>/dev/null | jq -r '
+                "   Sync: \(.sync.status // "Unknown")",
+                "   Health: \(.health.status // "Unknown")",
+                "   Message: \(.conditions[0].message // "No message")"
+              ' 2>/dev/null || echo "   Unable to get status"
+              echo ""
+              
+              # Check kafka-cluster app status if it exists
+              echo "2. Kafka-Cluster App Status:"
+              if kubectl get application kafka-cluster -n argocd 2>/dev/null >/dev/null; then
+                kubectl get application kafka-cluster -n argocd -o jsonpath='{.status}' 2>/dev/null | jq -r '
+                  "   Sync: \(.sync.status // "Unknown")",
+                  "   Health: \(.health.status // "Unknown")",
+                  "   Last Sync: \(.operationState.finishedAt // "Not synced yet")",
+                  "   Message: \(.conditions[0].message // "No message")"
+                ' 2>/dev/null || echo "   Unable to get status"
+                
+                # Show sync operation details if available
+                echo ""
+                echo "   Recent Sync Operation:"
+                kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.operationState.operation.sync}' 2>/dev/null | jq '.' 2>/dev/null || echo "   No sync operation yet"
+              else
+                echo "   ⚠️  kafka-cluster Application not created yet"
+                echo "   Parent app should create child applications"
+              fi
+              echo ""
+              
+              # Check ArgoCD application controller logs for errors
+              echo "3. ArgoCD Application Controller Logs (last 20 lines):"
+              kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-application-controller --tail=20 2>/dev/null | grep -i "kafka\|error\|failed" || echo "   No relevant logs found"
+              echo ""
+              
+              # Check Strimzi operator logs
+              echo "4. Strimzi Operator Logs (last 15 lines):"
+              kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=15 2>/dev/null || echo "   Unable to get operator logs"
+              echo ""
+              
+              # Check kafka namespace resources
+              echo "5. Kafka Namespace Resources:"
+              kubectl get all -n kafka 2>/dev/null || echo "   Unable to list resources"
+              echo ""
+              
+              # Check if kafka-cluster manifests exist in ArgoCD repo
+              echo "6. ArgoCD Source Status:"
+              kubectl get application kafka-cluster -n argocd -o jsonpath='{.spec.source}' 2>/dev/null | jq '.' 2>/dev/null || echo "   kafka-cluster app not found"
+              echo "-------------------------------------------"
+              echo ""
+            fi
+            
             sleep 5
             
             if [ $i -eq $MAX_ATTEMPTS ]; then
-              echo "⚠️  Kafka cluster CR not created after 2 minutes"
               echo ""
-              echo "This is expected if:"
-              echo "  1. kafka-cluster ArgoCD app hasn't synced yet"
-              echo "  2. Strimzi operator is still processing"
+              echo "❌ Kafka cluster CR not created after 2 minutes"
               echo ""
-              echo "Current kafka namespace resources:"
-              kubectl get all -n kafka
+              echo "📋 Final Diagnostic Report:"
+              echo "==========================================="
+              
+              # Final status check
+              echo ""
+              echo "1. All ArgoCD Applications:"
+              kubectl get applications -n argocd -o wide
+              echo ""
+              
+              echo "2. Parent App Details:"
+              kubectl describe application trading-system -n argocd 2>/dev/null | tail -30
+              echo ""
+              
+              if kubectl get application kafka-cluster -n argocd 2>/dev/null >/dev/null; then
+                echo "3. Kafka-Cluster App Details:"
+                kubectl describe application kafka-cluster -n argocd 2>/dev/null | tail -30
+                echo ""
+              fi
+              
+              echo "4. Kafka Namespace Events:"
+              kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -20
+              echo ""
+              
+              echo "5. ArgoCD Namespace Events:"
+              kubectl get events -n argocd --sort-by='.lastTimestamp' | grep -i kafka | tail -20 || echo "No kafka-related events"
+              echo ""
+              
+              echo "==========================================="
+              echo ""
+              echo "⚠️  Possible causes:"
+              echo "  1. Parent app-of-apps not syncing child apps"
+              echo "  2. kafka-cluster Application manifest has errors"
+              echo "  3. Git repository path incorrect in parent app"
+              echo "  4. ArgoCD application controller issues"
+              echo ""
+              echo "💡 Next steps:"
+              echo "  - Check ArgoCD UI: kubectl port-forward svc/trading-argocd-server -n argocd 8080:80"
+              echo "  - Manually sync: kubectl patch application kafka-cluster -n argocd --type merge -p '{\"metadata\":{\"annotations\":{\"argocd.argoproj.io/refresh\":\"hard\"}}}'"
+              echo "  - Check logs: kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-application-controller"
               echo ""
               echo "⚠️  Continuing without Kafka cluster verification"
               echo "    Check ArgoCD UI for kafka-cluster app status"
