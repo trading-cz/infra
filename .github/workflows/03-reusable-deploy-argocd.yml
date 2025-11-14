@@ -352,11 +352,29 @@ jobs:
           echo "========================================"
           
           CONTROL_IP="${{ inputs.control_plane_ip }}"
-          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep trading-argocd-server | cut -d'/' -f2)
-          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+          
+          # Get the main ArgoCD server service (not metrics)
+          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep "trading-argocd-server$" | head -1 | cut -d'/' -f2)
+          
+          if [ -z "$ARGOCD_SERVICE" ]; then
+            echo "❌ ArgoCD service not found"
+            echo "Available services:"
+            kubectl get svc -n argocd
+            exit 1
+          fi
+          
+          # Get NodePort for HTTP (port 80)
+          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
           
           if [ -z "$NODEPORT" ]; then
+            echo "⚠️  HTTP port not found, trying first port..."
             NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
+          fi
+          
+          if [ -z "$NODEPORT" ]; then
+            echo "❌ Could not determine NodePort"
+            kubectl get svc $ARGOCD_SERVICE -n argocd -o yaml
+            exit 1
           fi
           
           echo "ArgoCD Service: $ARGOCD_SERVICE"
@@ -364,15 +382,37 @@ jobs:
           echo "Testing URL: http://$CONTROL_IP:$NODEPORT"
           echo ""
           
-          # Wait for service to be responsive
-          echo "Waiting for ArgoCD UI to respond..."
+          # First check if pods are ready
+          echo "Checking ArgoCD server pods..."
+          kubectl get pods -n argocd -l app.kubernetes.io/name=trading-argocd-server
+          echo ""
+          
+          echo "Waiting for ArgoCD server pod to be ready..."
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=trading-argocd-server -n argocd --timeout=120s || {
+            echo "❌ ArgoCD server pod not ready"
+            echo "Pod status:"
+            kubectl get pods -n argocd
+            echo ""
+            echo "Events:"
+            kubectl get events -n argocd --sort-by='.lastTimestamp' | tail -20
+            exit 1
+          }
+          
+          echo "✅ ArgoCD server pod is ready"
+          echo ""
+          
+          # Now test HTTP accessibility
+          echo "Testing HTTP accessibility..."
           MAX_ATTEMPTS=12
           for i in $(seq 1 $MAX_ATTEMPTS); do
-            if curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" | grep -q "200\|302\|401"; then
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "000")
+            
+            if echo "$HTTP_CODE" | grep -q "200\|302\|401"; then
               echo "✅ ArgoCD UI is accessible at http://$CONTROL_IP:$NODEPORT"
+              echo "   HTTP Status: $HTTP_CODE"
               
               # Try to get the actual page title
-              RESPONSE=$(curl -s --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" || echo "")
+              RESPONSE=$(curl -s --connect-timeout 5 "http://$CONTROL_IP:$NODEPORT" 2>/dev/null || echo "")
               if echo "$RESPONSE" | grep -qi "argocd\|argo cd"; then
                 echo "✅ Confirmed ArgoCD UI page is being served"
               else
@@ -381,7 +421,7 @@ jobs:
               break
             fi
             
-            echo "⏳ Attempt $i/$MAX_ATTEMPTS: Waiting for UI to respond..."
+            echo "⏳ Attempt $i/$MAX_ATTEMPTS: HTTP $HTTP_CODE, waiting for UI to respond..."
             sleep 5
             
             if [ $i -eq $MAX_ATTEMPTS ]; then
@@ -389,13 +429,13 @@ jobs:
               echo ""
               echo "Debugging information:"
               echo "Service details:"
-              kubectl get svc $ARGOCD_SERVICE -n argocd -o wide
+              kubectl get svc -n argocd
               echo ""
               echo "Pod status:"
-              kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server
+              kubectl get pods -n argocd
               echo ""
               echo "Server logs (last 30 lines):"
-              kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server --tail=30 || true
+              kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=30 || true
               exit 1
             fi
           done
@@ -480,18 +520,23 @@ jobs:
       - name: Verify ArgoCD Installation
         run: |
           CONTROL_IP="${{ inputs.control_plane_ip }}"
-          ARGOCD_SERVICE=$(kubectl get svc -n argocd -o name | grep trading-argocd-server | cut -d'/' -f2)
-          NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+          
+          # Get NodePort from service
+          NODEPORT=$(kubectl get svc trading-argocd-server -n argocd -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}' 2>/dev/null || echo "")
           
           if [ -z "$NODEPORT" ]; then
-            NODEPORT=$(kubectl get svc $ARGOCD_SERVICE -n argocd -o jsonpath='{.spec.ports[0].nodePort}')
+            NODEPORT=$(kubectl get svc -n argocd -o name | grep "trading-argocd-server$" | head -1 | xargs -I {} kubectl get {} -n argocd -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "N/A")
           fi
           
           echo "=========================================="
           echo "  ArgoCD Installation Summary"
           echo "=========================================="
           echo "Namespace: argocd"
-          echo "ArgoCD UI: http://$CONTROL_IP:$NODEPORT"
+          if [ "$NODEPORT" != "N/A" ]; then
+            echo "ArgoCD UI: http://$CONTROL_IP:$NODEPORT"
+          else
+            echo "ArgoCD UI: Check service for NodePort"
+          fi
           echo "Username: admin"
           echo ""
           echo "Pods:"
@@ -501,6 +546,6 @@ jobs:
           kubectl get svc -n argocd
           echo ""
           echo "Applications:"
-          kubectl get applications -n argocd
+          kubectl get applications -n argocd 2>/dev/null || echo "No applications yet"
           echo "=========================================="
 

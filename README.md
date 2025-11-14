@@ -12,31 +12,39 @@ Ephemeral K3s clusters on Hetzner Cloud with persistent Primary IPs for algorith
 - **K3s + Kafka**: Streaming pipeline for market data → trading strategies
 
 ## 🏗️ Architecture
-Two repositories work together:
-1. **Infrastructure (this repo: infra)**: Terraform code to create Hetzner resources
-2. **Applications (separate repo: config)**: Apps config + Strimzi Kafka definitions deployed via ArgoCD
 
-** Clear Separation of Concerns**
-Infra Repository (Infrastructure) 
-- Provisions K3s cluster (Terraform)
-- Installs ArgoCD (cloud-init)
-- Configures ArgoCD (bootstrap - connects to config repo)
-- Installs Strimzi operator
-- One-time setup per environment
+### Repository Separation
+**Infrastructure (this repo: infra)** → Platform provisioning & operators
+- Terraform: Hetzner resources (VMs, network, IPs)
+- GitHub Actions: Deployment orchestration
+- ArgoCD Operator installation (v0.15.0)
+- ArgoCD instance deployment + parent app-of-apps
+- Strimzi Operator deployment (via ArgoCD)
 
-Config Repository (Applications)
-- Kafka cluster definitions
-- Application deployments (ingestion, strategies)
-- Kafka topics, users
-- Continuous deployments (every change triggers sync)
+**Applications (config repo)** → Workload definitions (GitOps)
+- Kustomize configurations for all environments
+- ArgoCD Applications (app-of-apps pattern)
+- Kafka cluster definitions (Strimzi CRs)
+- Trading strategies deployments
+- Topics, users, and configs
+
+### Deployment Flow
+```
+Terraform → K3s → ArgoCD Operator → ArgoCD Instance → Parent App → Child Apps
+                                                           ├─ kafka-cluster (Strimzi + Kafka)
+                                                           └─ dummy-strategy (sample app)
+```
 
 
 ### Infrastructure Components
 
-**2-Node Cluster (dev) / 4-Node Cluster (prod):**
-- **Control Plane**: K3s server + ArgoCD + Python apps (Primary IP #1)
-- **Kafka-0**: Kafka broker with external access (Primary IP #2)
-- **Kafka-1, Kafka-2** (prod only): Additional Kafka brokers (temporary IPs)
+**2-Node Dev Cluster:**
+- **k3s-control** (Primary IP #1): K3s control plane + ArgoCD + apps
+- **kafka-0** (Primary IP #2): Kafka broker (NodePort 33333 for external access)
+
+**4-Node Prod Cluster** (future):
+- **k3s-control** (Primary IP #1): K3s control plane + ArgoCD
+- **kafka-0, kafka-1, kafka-2** (Primary IP #2 on kafka-0): Kafka cluster (3 brokers)
 
 ### Network Architecture
 
@@ -121,43 +129,32 @@ infra/
 
 **What happens (~10 minutes):**
 ```
-1. Create/Find Primary IPs (2 IPs, idempotent)
-   ├─ Control Plane IP: Created if not exists, reused if exists
-   └─ Kafka-0 IP: Created if not exists, reused if exists
+1. Provision Infrastructure (01-reusable-provision-infra.yml)
+   ├─ Create/reuse Primary IPs (2 IPs, idempotent)
+   ├─ Terraform: Network, Firewall, SSH Key, VMs
+   ├─ Cloud-init: K3s installation on all nodes
+   └─ Output: Control plane IP, kubeconfig artifact
 
-2. Terraform Plan & Apply
-   ├─ Create Private Network (10.0.1.0/24)
-   ├─ Create Firewall (SSH, K3s API, HTTPS)
-   ├─ Create SSH Key
-   ├─ Create Control Plane VM (attach Primary IP #1)
-   └─ Create Kafka Node(s) (attach Primary IP #2 to kafka-0)
+2. Verify Cluster (02-reusable-verify-cluster.yml)
+   ├─ SSH connectivity check
+   ├─ Cloud-init completion (/root/k3s-ready.txt)
+   ├─ K3s cluster health (nodes, pods)
+   └─ Network connectivity tests
 
-3. Cloud-Init Installation (Control Plane)
-   ├─ Install K3s server (stable channel)
-   ├─ Install ArgoCD
-   └─ Create marker file: /root/k3s-ready.txt
+3. Deploy ArgoCD (03-reusable-deploy-argocd.yml)
+   ├─ Install ArgoCD Operator v0.15.0
+   ├─ Deploy ArgoCD instance (trading-argocd)
+   ├─ Configure admin password
+   ├─ Verify UI accessibility (http://<ip>:<nodeport>)
+   ├─ Deploy parent app-of-apps (trading-system)
+   └─ Verify child applications syncing
 
-4. Token Distribution (GitHub Actions)
-   ├─ Retrieve K3s token from control plane
-   └─ Push token to worker node(s)
-
-5. Cloud-Init Installation (Worker Nodes)
-   ├─ Wait for K3s control plane API (port 6443)
-   ├─ Wait for token file (/tmp/k3s-token)
-   ├─ Install K3s agent
-   ├─ Join cluster
-   └─ Create marker file: /root/k3s-agent-ready.txt
-
-6. Verification Steps
-   ├─ SSH accessibility
-   ├─ Cloud-init completion
-   ├─ K3s cluster (2+ nodes)
-   ├─ System pods running
-   ├─ ArgoCD deployed
-   ├─ Traefik ingress controller
-   └─ Network connectivity
-
-7. Upload kubeconfig artifact
+4. Deploy Strimzi & Kafka (04-reusable-deploy-strimzi.yml)
+   ├─ Verify Strimzi operator (deployed via ArgoCD)
+   ├─ Verify kafka-cluster Application syncing
+   ├─ Wait for Kafka CR (trading-cluster) creation
+   ├─ Check Kafka pods running
+   └─ Test external access (NodePort 33333)
 ```
 
 #### Step 2: Access Cluster
@@ -175,16 +172,34 @@ infra/
 
 3. **Access ArgoCD**:
    ```powershell
-   # Port forward
-   kubectl port-forward svc/argocd-server -n argocd 8080:443
+   # Get ArgoCD NodePort
+   kubectl get svc -n argocd trading-argocd-server
+   # Note the NodePort (e.g., 31168)
    
-   # Get admin password (operator-managed secret)
+   # Get admin password
    kubectl -n argocd get secret trading-argocd-cluster -o jsonpath="{.data.admin\\.password}" | base64 -d
    
-   # Open: https://localhost:8080
+   # Open: http://<control-plane-ip>:<nodeport>
    # Login: admin / <password>
    ```
-   The Argo CD Operator stores the initial password in the `trading-argocd-cluster` secret and keeps it in sync with the control plane. Rotate the password by patching this secret; the operator propagates changes automatically.
+
+4. **Verify Kafka Deployment**:
+   ```powershell
+   # Check ArgoCD applications
+   kubectl get applications -n argocd
+   # Should show: trading-system, kafka-cluster, dummy-strategy
+   
+   # Check Kafka cluster
+   kubectl get kafka -n kafka
+   # Should show: trading-cluster
+   
+   # Check Kafka pods
+   kubectl get pods -n kafka
+   
+   # Get external Kafka address
+   kubectl get svc -n kafka trading-cluster-kafka-external-bootstrap
+   # External: <control-plane-ip>:33333
+   ```
 
 #### Step 3: Daily Cleanup (Cost Optimization)
 
@@ -205,20 +220,28 @@ infra/
 
 #### Step 4: Complete Teardown (Permanent)
 
-**⚠️ WARNING: This deletes Primary IPs - cannot be recovered!**
+**⚠️ WARNING: Deletes Primary IPs - cannot be recovered!**
 
-1. Go to: **Actions** → **Hetzner Cloud Maintenance**
-2. Click **Run workflow**
-3. Select:
-   - Action: **`destroy-all`**
-4. Wait for 10-second warning, then confirm
+Use action: **`destroy-all`** to delete everything including Primary IPs.
 
-**What happens:**
-```
-❌ Deletes EVERYTHING including Primary IPs
-❌ Next deployment gets new random IPs
-❌ DNS must be updated to new IPs
-```
+## 🔑 GitHub Actions Workflows
+
+### Main Workflows
+- **deploy-cluster.yml**: Orchestrates full deployment (calls 01-04 reusable workflows)
+- **hcloud-maintenance.yml**: List, destroy cluster, or destroy all resources
+
+### Reusable Workflows (Called by deploy-cluster.yml)
+1. **01-reusable-provision-infra.yml**: Terraform deployment + Primary IP management
+2. **02-reusable-verify-cluster.yml**: K3s cluster health checks
+3. **03-reusable-deploy-argocd.yml**: ArgoCD operator + instance + parent app deployment
+4. **04-reusable-deploy-strimzi.yml**: Verify Strimzi & Kafka via ArgoCD
+
+### Key Improvements (Recent)
+- ✅ ArgoCD UI accessibility verification (actual NodePort testing)
+- ✅ Automatic parent app-of-apps deployment (enables GitOps automation)
+- ✅ ArgoCD Applications sync status monitoring
+- ✅ Kafka cluster deployment verification via ArgoCD
+- ✅ Kafka external access testing (NodePort 33333)
 
 ## 🛠️ Manual Deployment (Local Terraform)
 
@@ -607,15 +630,65 @@ journalctl -u k3s -n 100
 - [Strimzi Kafka Operator](https://strimzi.io/)
 - [ArgoCD Documentation](https://argo-cd.readthedocs.io/)
 
+## 🎓 Key Design Decisions
+
+### 1. Parent App-of-Apps Pattern
+**Critical**: Parent app (`trading-system`) must be deployed to trigger GitOps automation. Without it:
+- ❌ ArgoCD is installed but has no applications
+- ❌ Kafka cluster is never created
+- ✅ Workflow 03 now automatically deploys parent app after ArgoCD installation
+
+### 2. Workflow Orchestration
+**4-stage deployment** ensures proper dependency order:
+1. Infrastructure (Terraform + K3s)
+2. Verification (cluster health)
+3. ArgoCD (operator + instance + parent app)
+4. Strimzi verification (operator + Kafka cluster via ArgoCD)
+
+### 3. Verification Strategy
+Each stage validates before proceeding:
+- HTTP accessibility tests (ArgoCD UI, Kafka)
+- Sync status monitoring (ArgoCD Applications)
+- Resource existence checks (CRDs, pods, services)
+- External connectivity tests (NodePort reachability)
+
+### 4. Primary IP Management
+
+### 4. Primary IP Management
+GitHub Actions creates Primary IPs **before** Terraform runs:
+- IDs passed via `TF_VAR_*` environment variables
+- Terraform assigns during server creation (no reboot)
+- Same IPs across all deployments (DNS stable)
+
+### 5. Cloud-Init Pattern
+`write_files` + `runcmd` pattern (Hetzner Ubuntu 22.04 has broken `runcmd`):
+```yaml
+write_files:
+  - path: /root/setup.sh
+    content: |
+      #!/bin/bash
+      # Setup commands
+runcmd:
+  - /root/setup.sh
+```
+
+### 6. K3s Token Distribution
+GitHub Actions orchestrates token sharing:
+1. Control plane creates token
+2. GitHub Actions retrieves token via SSH
+3. GitHub Actions pushes token to worker nodes
+4. Workers join cluster using token
+
 ## 🎓 Lessons Learned
 
-1. **Primary IPs**: Cannot be assigned during server creation if Terraform manages both → Create IPs first in GitHub Actions
-2. **Cloud-Init**: `runcmd` broken on Hetzner Ubuntu 22.04 → Use `write_files` + script pattern
-3. **K3s Token**: Worker nodes can't SSH to control plane → GitHub Actions orchestrates token distribution
-4. **Resource Labels**: Essential for automated cleanup → Always add environment/cluster/role labels
-5. **Idempotency**: GitHub Actions checks if resources exist before creating → Safe to re-run workflows
-6. **Validation**: Add comprehensive verification steps → Catch issues early in deployment
-7. **Logging**: Redirect all cloud-init output to `/root/cloud-init.log` → Essential for debugging
+1. **App-of-Apps Deployment**: Must deploy parent app to activate GitOps (was missing!)
+2. **Verification Importance**: HTTP/TCP tests catch issues early (ArgoCD UI, Kafka NodePort)
+3. **Primary IPs**: Cannot be assigned during server creation if Terraform manages both → Create IPs first
+4. **Cloud-Init**: `runcmd` broken on Hetzner Ubuntu 22.04 → Use `write_files` + script pattern
+5. **K3s Token**: Worker nodes can't SSH to control plane → GitHub Actions orchestrates distribution
+6. **Resource Labels**: Essential for automated cleanup → Always add environment/cluster/role labels
+7. **Idempotency**: Check resource existence before creating → Safe to re-run workflows
+8. **ArgoCD Sync Monitoring**: Wait for Applications to sync before assuming deployment complete
 
 ## 📈 Roadmap
 
@@ -626,11 +699,13 @@ journalctl -u k3s -n 100
 - ✅ GitHub Actions workflows
 - ✅ Comprehensive documentation
 
-### Phase 2: Kafka Deployment (In Progress)
-- ⏳ Deploy Strimzi Kafka Operator via ArgoCD
-- ⏳ Create Kafka cluster custom resource
-- ⏳ Configure external access (NodePort 33333)
-- ⏳ Test Kafka producer/consumer
+### Phase 2: Application Deployment (✅ Complete)
+- ✅ ArgoCD Operator v0.15.0 automated installation
+- ✅ Parent app-of-apps pattern (trading-system)
+- ✅ Strimzi Kafka Operator (deployed via ArgoCD)
+- ✅ Kafka cluster (1 broker for dev, external NodePort 33333)
+- ✅ Automated verification workflows
+- ✅ UI accessibility and sync status checks
 
 ### Phase 3: Monitoring (Planned)
 - 📋 Prometheus + Grafana
