@@ -33,6 +33,7 @@ jobs:
         with:
           repository: trading-cz/config
           path: config
+          token: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
 
       - name: Setup Terraform ${{ env.TF_VERSION }}
         uses: hashicorp/setup-terraform@v3
