@@ -1,646 +1,153 @@
-# K3s Trading Infrastructure - Terraform
+actionlint
+==========
+[![CI Badge][]][CI]
+[![API Document][api-badge]][apidoc]
 
-Ephemeral K3s clusters on Hetzner Cloud with persistent Primary IPs for algorithmic trading workloads.
+[actionlint][repo] is a static checker for GitHub Actions workflow files. [Try it online!][playground]
 
-## � Core Concept
+Features:
 
-**Deploy clusters only during trading hours → Cost savings reasons **
+- **Syntax check for workflow files** to check unexpected or missing keys following [workflow syntax][syntax-doc]
+- **Strong type check for `${{ }}` expressions** to catch several semantic errors like access to not existing property,
+  type mismatches, ...
+- **Actions usage check** to check that inputs at `with:` and outputs in `steps.{id}.outputs` are correct
+- **Reusable workflow check** to check inputs/outputs/secrets of reusable workflows and workflow calls
+- **[shellcheck][] and [pyflakes][] integrations** for scripts at `run:`
+- **Security checks**; [script injection][script-injection-doc] by untrusted inputs, hard-coded credentials
+- **Other several useful checks**; [glob syntax][filter-pattern-doc] validation, dependencies check for `needs:`,
+  runner label validation, cron syntax validation, ...
 
-- **Ephemeral VMs**: Created on-demand, destroyed after hours
-- **Persistent IPs**: Remain assigned (€1/month total), maintain stable DNS
-- **Automated Deployment**: GitHub Actions orchestrates everything
-- **K3s + Kafka**: Streaming pipeline for market data → trading strategies
+See [the full list](docs/checks.md) of checks done by actionlint.
 
-## 🏗️ Architecture
-Two repositories work together:
-1. **Infrastructure (this repo: infra)**: Terraform code to create Hetzner resources
-2. **Applications (separate repo: config)**: Apps config + Strimzi Kafka definitions deployed via ArgoCD
+<img src="https://github.com/rhysd/ss/blob/master/actionlint/main.gif?raw=true" alt="actionlint reports 7 errors" width="806" height="492"/>
 
-** Clear Separation of Concerns**
-Infra Repository (Infrastructure) 
-- Provisions K3s cluster (Terraform)
-- Installs ArgoCD (cloud-init)
-- Configures ArgoCD (bootstrap - connects to config repo)
-- Installs Strimzi operator
-- One-time setup per environment
-
-Config Repository (Applications)
-- Kafka cluster definitions
-- Application deployments (ingestion, strategies)
-- Kafka topics, users
-- Continuous deployments (every change triggers sync)
-
-
-### Infrastructure Components
-
-**2-Node Cluster (dev) / 4-Node Cluster (prod):**
-- **Control Plane**: K3s server + ArgoCD + Python apps (Primary IP #1)
-- **Kafka-0**: Kafka broker with external access (Primary IP #2)
-- **Kafka-1, Kafka-2** (prod only): Additional Kafka brokers (temporary IPs)
-
-### Network Architecture
-
-```
-┌────────────────────────────────────────────────────────────┐
-│       Hetzner K3S cluster                                  │
-├────────────────────────────────────────────────────────────┤
-│                                                            │
-│ ┌────────────────────────────────────────────────────────┐ │
-│ │ Primary IP #1 (€0.50/month) → k3s-control (10.0.1.10)  │ │
-│ │   ├─ K3s Control Plane (API: 6443)                     │ │
-│ │   ├─ ArgoCD (GitOps)                                   │ │
-│ │   └─ Trading Apps (Python)                             │ │
-│ └────────────────────────────────────────────────────────┘ │
-│                                                            │
-│ ┌────────────────────────────────────────────────────────┐ │
-│ │ Primary IP #2 (€0.50/month) → kafka-0 (10.0.1.20)      │ │
-│ │   ├─ Kafka Broker (Internal: 9092)                     │ │
-│ │   └─ Kafka External Access (NodePort: 33333)           │ │
-│ └────────────────────────────────────────────────────────┘ │
-│                                                            │     
-│ ┌────────────────────────────────────────────────────────┐ │
-│ │ Private Network: 10.0.1.0/24                           │ │
-│ │   ├─ Control Plane ↔ Kafka (internal communication)    │ │
-│ │   └─ All pods communicate via private IPs              │ │
-│ └────────────────────────────────────────────────────────┘ │ 
-└────────────────────────────────────────────────────────────┘
-```
-
-### Key Features
-
-- ✅ **Primary IPs persist** between deployments (same IPs every time)
-- ✅ **No manual VM management** (all automated via GitHub Actions)
-- ✅ **GitOps deployment** (ArgoCD manages applications)
-- ✅ **Label-based cleanup** (maintenance workflow finds resources by labels)
-
-## 📁 Structure
-
-```
-infra/
-├── main.tf                    # Root module - infrastructure orchestration
-├── variables.tf               # All variable declarations
-├── outputs.tf                 # All outputs
-├── terraform.tfvars.example   # Credentials template
-├── environments/
-│   ├── dev.tfvars            # Dev-specific settings
-│   └── prod.tfvars           # Prod-specific settings
-└── modules/
-    ├── network/              # VPC, subnet, firewall
-    ├── k3s-server/           # K3s control plane
-    └── kafka-server/         # Kafka nodes
-```
-
-## 🚀 Deployment Process (GitHub Actions - RECOMMENDED)
-
-### Prerequisites
-
-1. **GitHub Secrets Setup** (Settings → Secrets and variables → Actions):
-   ```
-   HCLOUD_TOKEN      - Hetzner API token (Read & Write)
-   SSH_PUBLIC_KEY    - SSH public key for server access
-   SSH_PRIVATE_KEY   - SSH private key (optional, for manual SSH)
-   ```
-
-2. **Generate SSH Key** (if you don't have one):
-   ```powershell
-   ssh-keygen -t ed25519 -f ./id_ed25519 -N ""
-   # Add id_ed25519.pub content to SSH_PUBLIC_KEY secret
-   # Add id_ed25519 content to SSH_PRIVATE_KEY secret
-   ```
-
-### Deployment Steps
-
-#### Step 1: Deploy Cluster
-
-1. Go to: **Actions** → **Deploy K3s Cluster**
-2. Click **Run workflow**
-3. Select:
-   - Branch: `master` (or your working branch)
-   - Environment: `dev` or `prod`
-4. Click **Run workflow**
-
-**What happens (~10 minutes):**
-```
-1. Create/Find Primary IPs (2 IPs, idempotent)
-   ├─ Control Plane IP: Created if not exists, reused if exists
-   └─ Kafka-0 IP: Created if not exists, reused if exists
-
-2. Terraform Plan & Apply
-   ├─ Create Private Network (10.0.1.0/24)
-   ├─ Create Firewall (SSH, K3s API, HTTPS)
-   ├─ Create SSH Key
-   ├─ Create Control Plane VM (attach Primary IP #1)
-   └─ Create Kafka Node(s) (attach Primary IP #2 to kafka-0)
-
-3. Cloud-Init Installation (Control Plane)
-   ├─ Install K3s server (stable channel)
-   ├─ Install ArgoCD
-   └─ Create marker file: /root/k3s-ready.txt
-
-4. Token Distribution (GitHub Actions)
-   ├─ Retrieve K3s token from control plane
-   └─ Push token to worker node(s)
-
-5. Cloud-Init Installation (Worker Nodes)
-   ├─ Wait for K3s control plane API (port 6443)
-   ├─ Wait for token file (/tmp/k3s-token)
-   ├─ Install K3s agent
-   ├─ Join cluster
-   └─ Create marker file: /root/k3s-agent-ready.txt
-
-6. Verification Steps
-   ├─ SSH accessibility
-   ├─ Cloud-init completion
-   ├─ K3s cluster (2+ nodes)
-   ├─ System pods running
-   ├─ ArgoCD deployed
-   ├─ Traefik ingress controller
-   └─ Network connectivity
-
-7. Upload kubeconfig artifact
-```
-
-#### Step 2: Access Cluster
-
-1. **Download kubeconfig** from GitHub Actions artifacts:
-   - Go to workflow run → Artifacts → Download `kubeconfig-<env>`
-   - Extract `kubeconfig.yaml`
-
-2. **Use kubectl**:
-   ```powershell
-   $env:KUBECONFIG = ".\kubeconfig.yaml"
-   kubectl get nodes
-   kubectl get pods -A
-   ```
-
-3. **Access ArgoCD**:
-   ```powershell
-   # Port forward
-   kubectl port-forward svc/argocd-server -n argocd 8080:443
-   
-   # Get admin password (operator-managed secret)
-   kubectl -n argocd get secret trading-argocd-cluster -o jsonpath="{.data.admin\\.password}" | base64 -d
-   
-   # Open: https://localhost:8080
-   # Login: admin / <password>
-   ```
-   The Argo CD Operator stores the initial password in the `trading-argocd-cluster` secret and keeps it in sync with the control plane. Rotate the password by patching this secret; the operator propagates changes automatically.
-
-#### Step 3: Daily Cleanup (Cost Optimization)
-
-1. Go to: **Actions** → **Hetzner Cloud Maintenance**
-2. Click **Run workflow**
-3. Select:
-   - Branch: `from-scratch-2`
-   - Environment: `dev`
-   - Action: **`destroy-cluster`**
-4. Click **Run workflow**
-
-**What happens (~30 seconds):**
-```
-✅ Deletes: VMs, Networks, Firewalls, SSH Keys
-✅ Keeps: Primary IPs (€1/month billing continues)
-✅ Result: Next deployment reuses same IPs
-```
-
-#### Step 4: Complete Teardown (Permanent)
-
-**⚠️ WARNING: This deletes Primary IPs - cannot be recovered!**
-
-1. Go to: **Actions** → **Hetzner Cloud Maintenance**
-2. Click **Run workflow**
-3. Select:
-   - Action: **`destroy-all`**
-4. Wait for 10-second warning, then confirm
-
-**What happens:**
-```
-❌ Deletes EVERYTHING including Primary IPs
-❌ Next deployment gets new random IPs
-❌ DNS must be updated to new IPs
-```
-
-## 🛠️ Manual Deployment (Local Terraform)
-
-### 1. Setup Credentials
-
-```powershell
-# Set environment variables (do NOT create terraform.tfvars file)
-$env:TF_VAR_hcloud_token = "your-hetzner-token"
-$env:TF_VAR_ssh_public_key = "ssh-ed25519 AAAAC3Nza..."
-$env:TF_VAR_control_plane_primary_ip_id = "12345"  # From hcloud primary-ip list
-$env:TF_VAR_kafka_primary_ip_id = "67890"          # From hcloud primary-ip list
-```
-
-### 2. Deploy
-
-```powershell
-# Initialize Terraform
-C:\projects\apps\terraform_1.13.4\terraform.exe init
-
-# Plan deployment
-C:\projects\apps\terraform_1.13.4\terraform.exe plan -var-file="environments/dev.tfvars"
-
-# Apply
-C:\projects\apps\terraform_1.13.4\terraform.exe apply -var-file="environments/dev.tfvars"
-```
-
-### 3. Post-Deployment Manual Steps
-
-**⚠️ IMPORTANT: Local Terraform cannot handle token distribution!**
-
-After Terraform completes:
-
-```powershell
-# 1. Get control plane IP
-CONTROL_IP=$(terraform output -raw k3s_control_public_ip)
-
-# 2. Wait for K3s to be ready
-ssh root@$CONTROL_IP "tail -f /root/cloud-init.log"
-# Wait for: "K3s control plane setup complete"
-
-# 3. Get K3s token
-K3S_TOKEN=$(ssh root@$CONTROL_IP "cat /var/lib/rancher/k3s/server/node-token")
-
-# 4. Push token to worker node
-KAFKA_IP=$(terraform output -json kafka_server_public_ips | jq -r '.[0]')
-ssh root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"
-
-# 5. Monitor worker join
-ssh root@$KAFKA_IP "tail -f /root/cloud-init.log"
-# Wait for: "K3s agent setup complete"
-
-# 6. Verify cluster
-ssh root@$CONTROL_IP "kubectl get nodes"
-# Should show: 2 nodes (control-plane, kafka-0)
-```
-
-## 📊 Environment Comparison
-
-| Setting | Dev | Prod |
-|---------|-----|------|
-| **Environment** | dev | prod |
-| **Network** | 10.0.1.0/24 | 10.1.1.0/24 |
-| **Control Plane** | cx22 (2 vCPU, 4GB) | cx32 (4 vCPU, 8GB) |
-| **Kafka Nodes** | 1x cx22 | 3x cx32 |
-| **Running Hours** | 8h/day | 10h/day |
-| **Monthly Cost** | €12.90 (58% savings) | €48.60 (58% savings) |
-| **Primary IPs** | €1.00/month | €1.00/month |
-| **Purpose** | Testing | Production |
-
-**Shared Settings:**
-- K3s channel: `stable` (currently v1.33.5+k3s1)
-- Kafka version: 4.0.0 (Strimzi)
-- Location: nbg1 (Nuremberg)
-- Datacenter: nbg1-dc3
-
-## 🔧 How It Works
-
-### Primary IP Architecture
-
-**Problem Solved:** Hetzner cannot assign Primary IPs during server creation if Terraform manages both resources simultaneously (chicken-egg problem).
-
-**Solution:** GitHub Actions creates Primary IPs BEFORE Terraform runs:
-
-```
-GitHub Actions Workflow:
-1. Check if Primary IPs exist (by name)
-2. If not → Create unassigned Primary IPs
-3. If exists → Get their IDs
-4. Pass IDs to Terraform via TF_VAR_* environment variables
-5. Terraform assigns IPs during server creation (no reboot!)
-```
-
-**Benefits:**
-- ✅ IPs created once, reused forever
-- ✅ No manual VM shutdown/restart needed
-- ✅ Idempotent (safe to run multiple times)
-- ✅ Same IPs across deployments (DNS stable)
-
-### Cloud-Init Pattern
-
-**Problem Solved:** Hetzner Ubuntu 22.04 has broken `runcmd` module - commands don't execute.
-
-**Solution:** `write_files` + `runcmd` pattern:
+**Example of broken workflow:**
 
 ```yaml
-#cloud-config
-
-write_files:
-  - path: /root/setup.sh
-    permissions: '0755'
-    content: |
-      #!/bin/bash
-      # Your setup commands here
-      
-runcmd:
-  - /root/setup.sh  # Just execute the script
+on:
+  push:
+    branch: main
+    tags:
+      - 'v\d+'
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, linux-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: echo "Checking commit '${{ github.event.head_commit.message }}'"
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node_version: 16.x
+      - uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ matrix.platform }}-node-${{ hashFiles('**/package-lock.json') }}
+        if: ${{ github.repository.permissions.admin == true }}
+      - run: npm install && npm test
 ```
 
-**Why this works:**
-- ✅ `write_files` always works (creates script on disk)
-- ✅ Single simple `runcmd` command
-- ✅ Proper bash script with error handling
-- ✅ All output to `/root/cloud-init.log` for debugging
-
-### K3s Token Distribution
-
-**Problem Solved:** Worker nodes cannot SSH to control plane (no private key, no trust).
-
-**Solution:** GitHub Actions acts as orchestrator:
+**actionlint reports 7 errors:**
 
 ```
-1. Control plane installs K3s → creates token at /var/lib/rancher/k3s/server/node-token
-2. GitHub Actions (has SSH private key):
-   - SSH to control plane → retrieve token
-   - SSH to worker node → push token to /tmp/k3s-token
-3. Worker node cloud-init:
-   - Waits for /tmp/k3s-token file
-   - Installs K3s agent with token
-   - Joins cluster
+test.yaml:3:5: unexpected key "branch" for "push" section. expected one of "branches", "branches-ignore", "paths", "paths-ignore", "tags", "tags-ignore", "types", "workflows" [syntax-check]
+  |
+3 |     branch: main
+  |     ^~~~~~~
+test.yaml:5:11: character '\' is invalid for branch and tag names. only special characters [, ?, +, *, \ ! can be escaped with \. see `man git-check-ref-format` for more details. note that regular expression is unavailable. note: filter pattern syntax is explained at https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#filter-pattern-cheat-sheet [glob]
+  |
+5 |       - 'v\d+'
+  |           ^~~~
+test.yaml:10:28: label "linux-latest" is unknown. available labels are "windows-latest", "windows-2022", "windows-2019", "windows-2016", "ubuntu-latest", "ubuntu-22.04", "ubuntu-20.04", "ubuntu-18.04", "macos-latest", "macos-12", "macos-12.0", "macos-11", "macos-11.0", "macos-10.15", "self-hosted", "x64", "arm", "arm64", "linux", "macos", "windows". if it is a custom label for self-hosted runner, set list of labels in actionlint.yaml config file [runner-label]
+   |
+10 |         os: [macos-latest, linux-latest]
+   |                            ^~~~~~~~~~~~~
+test.yaml:13:41: "github.event.head_commit.message" is potentially untrusted. avoid using it directly in inline scripts. instead, pass it through an environment variable. see https://docs.github.com/en/actions/learn-github-actions/security-hardening-for-github-actions for more details [expression]
+   |
+13 |       - run: echo "Checking commit '${{ github.event.head_commit.message }}'"
+   |                                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+test.yaml:17:11: input "node_version" is not defined in action "actions/setup-node@v3". available inputs are "always-auth", "architecture", "cache", "cache-dependency-path", "check-latest", "node-version", "node-version-file", "registry-url", "scope", "token" [action]
+   |
+17 |           node_version: 16.x
+   |           ^~~~~~~~~~~~~
+test.yaml:21:20: property "platform" is not defined in object type {os: string} [expression]
+   |
+21 |           key: ${{ matrix.platform }}-node-${{ hashFiles('**/package-lock.json') }}
+   |                    ^~~~~~~~~~~~~~~
+test.yaml:22:17: receiver of object dereference "permissions" must be type of object but got "string" [expression]
+   |
+22 |         if: ${{ github.repository.permissions.admin == true }}
+   |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
 
-**Benefits:**
-- ✅ No inter-node SSH needed
-- ✅ No private key distribution
-- ✅ Synchronization built-in
-- ✅ Clean separation of concerns
+## Why?
 
-### Resource Labeling
+- **Running a workflow is time consuming.** You need to push the changes and wait until the workflow runs on GitHub even if
+  it contains some trivial mistakes. [act][] is useful to debug the workflow locally. But it is not suitable for CI and still
+  time consuming when your workflow gets larger.
+- **Checks of workflow files by GitHub are very loose.** It reports no error even if unexpected keys are in mappings
+  (meant that some typos in keys). And also it reports no error when accessing to property which is actually not existing.
+  For example `matrix.foo` when no `foo` is defined in `matrix:` section, it is evaluated to `null` and causes no error.
+- **Some mistakes silently break a workflow.** Most common case I saw is specifying missing property to cache key. In the
+  case cache silently does not work properly but a workflow itself runs without error. So you might not notice the mistake
+  forever.
 
-**Problem:** Old resources without labels couldn't be cleaned up by maintenance workflow.
+## Quick start
 
-**Solution:** All resources get labels:
+Install `actionlint` command by downloading [the released binary][releases] or by Homebrew or by `go install`. See
+[the installation document](docs/install.md) for more details like how to manage the command with several package managers
+or run via Docker container.
 
-```hcl
-labels = {
-  environment = "dev"
-  cluster     = "k3s-trading"
-  role        = "control-plane" | "kafka"
-}
+```sh
+go install github.com/rhysd/actionlint/cmd/actionlint@latest
 ```
 
-**Cleanup becomes simple:**
-```bash
-hcloud server list -l environment=dev -o columns=id | xargs hcloud server delete
-hcloud network list -l environment=dev -o columns=id | xargs hcloud network delete
-# etc.
+Basically all you need to do is run the `actionlint` command in your repository. actionlint automatically detects workflows and
+checks errors. actionlint focuses on finding out mistakes. It tries to catch errors as much as possible and make false positives
+as minimal as possible.
+
+```sh
+actionlint
 ```
 
-## 🎯 Key Benefits of This Structure
-
-### 1. DRY (Don't Repeat Yourself)
-- Single `main.tf` for all environments
-- No code duplication
-- Changes apply to all environments
-
-### 2. Environment Isolation
-- Separate `.tfvars` files
-- Different server types per environment
-- Independent state files (use workspaces or separate backends)
-
-### 3. Easy to Maintain
-- Update K3s version in one place
-- Modify infrastructure once
-- Clear separation of config vs code
-
-### 4. Scalable
-- Add new environments easily
-- Adjust resources per environment
-- Flexible Kafka node count
-
-## 💡 Usage Examples
-
-### Deploy with Custom Settings
-
-```powershell
-# Override specific variables
-terraform apply -var-file="environments/dev.tfvars" -var="kafka_node_count=2"
-
-# Use different K3s version
-terraform apply -var-file="environments/dev.tfvars" -var="k3s_version=v1.35.0+k3s1"
-```
-
-### Using Workspaces (Recommended)
-
-```powershell
-# Create dev workspace
-terraform workspace new dev
-terraform apply -var-file="environments/dev.tfvars"
-
-# Create prod workspace
-terraform workspace new prod
-terraform apply -var-file="environments/prod.tfvars"
-
-# Switch between environments
-terraform workspace select dev
-terraform workspace select prod
-```
-
-### Separate State Files
-
-```powershell
-# Dev with separate state
-terraform apply -var-file="environments/dev.tfvars" -state="dev.tfstate"
-
-# Prod with separate state
-terraform apply -var-file="environments/prod.tfvars" -state="prod.tfstate"
-```
-
-## 📝 Configuration Variables
-
-### Required (in terraform.tfvars)
-- `hcloud_token` - Hetzner Cloud API token
-- `ssh_public_key` - SSH public key
-
-### Environment-Specific (in environments/*.tfvars)
-- `environment` - "dev" or "prod"
-- `control_plane_server_type` - Server type for K3s
-- `kafka_server_type` - Server type for Kafka
-- `kafka_node_count` - Number of Kafka nodes
-- `network_cidr` - Network CIDR block
-
-### Shared (same across environments)
-- `k3s_version` - K3s version
-- `kafka_version` - Kafka version
-- `cluster_name` - Cluster name
-- `location` - Hetzner location
-
-## � Troubleshooting
-
-### Cloud-Init Not Executing
-
-**Symptom:** `cloud-init status` shows "done" but no logs in `/root/cloud-init.log`
-
-**Cause:** Hetzner Ubuntu 22.04 + cloud-init v25.1.4 has broken `runcmd` module
-
-**Solution:** Already implemented - see `write_files` + `runcmd` pattern above
-
-**Debug:**
-```bash
-# Check user-data received
-ssh root@<ip> "cat /var/lib/cloud/instance/user-data.txt"
-
-# Check cloud-init output
-ssh root@<ip> "cat /var/log/cloud-init-output.log | tail -100"
-
-# Check cloud-init status
-ssh root@<ip> "cloud-init status --long"
-
-# Check setup script exists
-ssh root@<ip> "ls -la /root/setup*.sh"
-
-# Manually run script
-ssh root@<ip> "/root/setup-k3s.sh"
-```
-
-### Worker Node Not Joining Cluster
-
-**Symptom:** Control plane has 1 node, worker stuck at "Retrieving K3s token"
-
-**Cause:** Worker cannot SSH to control plane (no private key)
-
-**Solution:** Already implemented - GitHub Actions pushes token
-
-**Verify:**
-```bash
-# Check if token file exists on worker
-ssh root@<kafka-ip> "cat /tmp/k3s-token"
-
-# Check worker cloud-init log
-ssh root@<kafka-ip> "tail -f /root/cloud-init.log"
-
-# Manually push token (if GitHub Actions failed)
-CONTROL_IP="<control-ip>"
-KAFKA_IP="<kafka-ip>"
-K3S_TOKEN=$(ssh root@$CONTROL_IP "cat /var/lib/rancher/k3s/server/node-token")
-ssh root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"
-```
-
-### Primary IP Not Assigned
-
-**Symptom:** Server created but has temporary IP, not Primary IP
-
-**Cause:** Primary IP ID not passed correctly to Terraform
-
-**Debug:**
-```bash
-# Check Primary IPs
-hcloud primary-ip list
-
-# Check if IDs are set
-echo $TF_VAR_control_plane_primary_ip_id
-echo $TF_VAR_kafka_primary_ip_id
-
-# Check Terraform plan
-terraform plan -var-file="environments/dev.tfvars"
-# Should show: ipv4 = <primary-ip-id>
-```
-
-### Resource Already Exists (Uniqueness Error)
-
-**Symptom:** Terraform fails with "SSH key not unique" or "name is already used"
-
-**Cause:** Old resources without labels from previous deployment
-
-**Solution:** Run manual cleanup workflow:
-1. Go to Actions → Manual Cleanup
-2. Select environment
-3. Run workflow
-4. Retry deployment
-
-**Manual cleanup:**
-```bash
-# List resources
-hcloud ssh-key list
-hcloud network list
-hcloud firewall list
-
-# Delete by ID
-hcloud ssh-key delete <id>
-hcloud network delete <id>
-hcloud firewall delete <id>
-```
-
-### Cluster Verification Failed
-
-**Symptom:** Workflow fails at "Verify K3s cluster operational"
-
-**Check:**
-```bash
-# SSH to control plane
-ssh root@<control-ip>
-
-# Check K3s status
-systemctl status k3s
-
-# Check nodes
-kubectl get nodes
-
-# Check pods
-kubectl get pods -A
-
-# Check logs
-journalctl -u k3s -n 100
-```
-
-## 🔒 Security Best Practices
-
-- ✅ Use GitHub Secrets for credentials (never commit to repo)
-- ✅ Rotate SSH keys quarterly
-- ✅ Use separate Hetzner tokens for dev/prod
-- ✅ Enable firewall rules (already configured)
-- ✅ Primary IPs only for control plane + kafka-0 (minimize attack surface)
-- ✅ Private network for inter-node communication (10.0.1.0/24)
-- ⚠️ Firewall currently disabled for testing (re-enable in production!)
-
-## 📚 Documentation
-
-### Project Documentation
-- [CLOUD_INIT_TROUBLESHOOTING.md](./CLOUD_INIT_TROUBLESHOOTING.md) - Detailed cloud-init issue analysis
-- [PRIMARY_IP_ARCHITECTURE.md](./PRIMARY_IP_ARCHITECTURE.md) - Primary IP implementation details
-- [VALIDATION_CHECKLIST.md](./VALIDATION_CHECKLIST.md) - Testing and validation guide
-
-### External Resources
-- [Hetzner Cloud Docs](https://docs.hetzner.com/cloud/)
-- [K3s Documentation](https://docs.k3s.io/)
-- [Strimzi Kafka Operator](https://strimzi.io/)
-- [ArgoCD Documentation](https://argo-cd.readthedocs.io/)
-
-## 🎓 Lessons Learned
-
-1. **Primary IPs**: Cannot be assigned during server creation if Terraform manages both → Create IPs first in GitHub Actions
-2. **Cloud-Init**: `runcmd` broken on Hetzner Ubuntu 22.04 → Use `write_files` + script pattern
-3. **K3s Token**: Worker nodes can't SSH to control plane → GitHub Actions orchestrates token distribution
-4. **Resource Labels**: Essential for automated cleanup → Always add environment/cluster/role labels
-5. **Idempotency**: GitHub Actions checks if resources exist before creating → Safe to re-run workflows
-6. **Validation**: Add comprehensive verification steps → Catch issues early in deployment
-7. **Logging**: Redirect all cloud-init output to `/root/cloud-init.log` → Essential for debugging
-
-## 📈 Roadmap
-
-### Phase 1: Core Infrastructure (✅ Complete)
-- ✅ Primary IP architecture
-- ✅ K3s cluster with ArgoCD
-- ✅ Cloud-init automation
-- ✅ GitHub Actions workflows
-- ✅ Comprehensive documentation
-
-### Phase 2: Kafka Deployment (In Progress)
-- ⏳ Deploy Strimzi Kafka Operator via ArgoCD
-- ⏳ Create Kafka cluster custom resource
-- ⏳ Configure external access (NodePort 33333)
-- ⏳ Test Kafka producer/consumer
-
-### Phase 3: Monitoring (Planned)
-- 📋 Prometheus + Grafana
-- 📋 K3s metrics
-- 📋 Kafka metrics
-- 📋 Custom dashboards
-
-### Phase 4: Production Hardening (Planned)
-- 📋 Enable firewall rules
-- 📋 TLS certificates (Let's Encrypt)
-- 📋 Backup strategy
-- 📋 Disaster recovery procedures
-
+Another option to try actionlint is [the online playground][playground]. Your browser can run actionlint through WebAssembly.
+
+See [the usage document](docs/usage.md) for more details.
+
+## Documents
+
+- [Checks](docs/checks.md): Full list of all checks done by actionlint with example inputs, outputs, and playground links.
+- [Installation](docs/install.md): Installation instructions. Prebuilt binaries, Homebrew package, a Docker image, building from
+  source, a download script (for CI) are available.
+- [Usage](docs/usage.md): How to use `actionlint` command locally or on GitHub Actions, the online playground, an official Docker
+  image, and integrations with reviewdog, Problem Matchers, super-linter, pre-commit, VS Code.
+- [Configuration](docs/config.md): How to configure actionlint behavior. Currently only labels of self-hosted runners can be
+  configured.
+- [Go API](docs/api.md): How to use actionlint as Go library.
+- [References](docs/reference.md): Links to resources.
+
+## Bug reporting
+
+When you see some bugs or false positives, it is helpful to [file a new issue][issue-form] with a minimal example
+of input. Giving me some feedbacks like feature requests or ideas of additional checks is also welcome.
+
+## License
+
+actionlint is distributed under [the MIT license](./LICENSE.txt).
+
+[CI Badge]: https://github.com/rhysd/actionlint/workflows/CI/badge.svg?branch=main&event=push
+[CI]: https://github.com/rhysd/actionlint/actions?query=workflow%3ACI+branch%3Amain
+[api-badge]: https://pkg.go.dev/badge/github.com/rhysd/actionlint.svg
+[apidoc]: https://pkg.go.dev/github.com/rhysd/actionlint
+[repo]: https://github.com/rhysd/actionlint
+[playground]: https://rhysd.github.io/actionlint/
+[shellcheck]: https://github.com/koalaman/shellcheck
+[pyflakes]: https://github.com/PyCQA/pyflakes
+[act]: https://github.com/nektos/act
+[syntax-doc]: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions
+[filter-pattern-doc]: https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#filter-pattern-cheat-sheet
+[script-injection-doc]: https://docs.github.com/en/actions/learn-github-actions/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+[issue-form]: https://github.com/rhysd/actionlint/issues/new
+[releases]: https://github.com/rhysd/actionlint/releases

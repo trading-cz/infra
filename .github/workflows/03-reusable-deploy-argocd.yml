@@ -117,7 +117,7 @@ jobs:
           if [ -d "config/base/operators/argocd" ]; then
             echo "Applying custom ArgoCD configuration from config repository..."
             # Filter out ArgoCD CR files as we're using Helm
-            find config/base/operators/argocd -name "*.yaml" -o -name "*.yml" | while read file; do
+            find config/base/operators/argocd -name "*.yaml" -o -name "*.yml" | while read -r file; do
               # Skip files that contain 'kind: ArgoCD' as they're operator-specific
               if ! grep -q "kind: ArgoCD" "$file" 2>/dev/null; then
                 kubectl apply -f "$file" || echo "Skipping $file"
@@ -144,8 +144,9 @@ jobs:
             echo "Setting custom admin password..."
             # Hash the password using bcrypt
             BCRYPT_PASSWORD=$(htpasswd -nbBC 10 "" "$ADMIN_PASSWORD" | tr -d ':\n' | sed 's/$2y/$2a/')
+            MTIME=$(date +%FT%T%Z)
             kubectl -n argocd patch secret argocd-secret \
-              -p "{\"stringData\": {\"admin.password\": \"$BCRYPT_PASSWORD\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
+              -p "{\"stringData\": {\"admin.password\": \"$BCRYPT_PASSWORD\", \"admin.passwordMtime\": \"$MTIME\"}}"
             echo "Admin password updated successfully"
           fi
 
