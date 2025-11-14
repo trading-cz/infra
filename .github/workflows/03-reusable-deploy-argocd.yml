@@ -51,3 +51,81 @@ jobs:
         run: |
           mkdir -p ~/.kube
           echo "${{ inputs.kubeconfig }}" > ~/.kube/config
+
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      - name: Install ArgoCD Operator
+        run: |
+          echo "Installing ArgoCD Operator via Helm..."
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm repo update
+          
+          helm install argocd-operator argo/argocd-operator \
+            --namespace argocd \
+            --create-namespace \
+            --version 0.15.0 \
+            --set replicaCount=1 \
+            --wait \
+            --timeout 5m
+          
+          echo "Verifying operator installation..."
+          kubectl get pods -n argocd
+          kubectl get crd | grep argoproj || echo "ArgoCD CRDs installed"
+
+      - name: Deploy ArgoCD Instance
+        run: |
+          echo "Deploying ArgoCD CR from config repository..."
+          kubectl apply -k config/base/operators/argocd
+          
+          echo "Waiting for ArgoCD components to be ready..."
+          kubectl wait --for=condition=available --timeout=5m \
+            deployment/trading-argocd-server -n argocd || true
+          kubectl wait --for=condition=available --timeout=5m \
+            deployment/trading-argocd-repo-server -n argocd || true
+          kubectl wait --for=condition=available --timeout=5m \
+            deployment/trading-argocd-redis -n argocd || true
+
+      - name: Configure ArgoCD Admin Password
+        if: inputs.environment == 'prod' || github.event.inputs.argocd_admin_password != ''
+        env:
+          ADMIN_PASSWORD: ${{ secrets.argocd_admin_password }}
+        run: |
+          if [ -n "$ADMIN_PASSWORD" ]; then
+            echo "Setting custom admin password..."
+            kubectl -n argocd patch secret trading-argocd-cluster \
+              -p "{\"stringData\": {\"admin.password\": \"$ADMIN_PASSWORD\"}}"
+            echo "Admin password updated successfully"
+          fi
+
+      - name: Get Initial Admin Password
+        run: |
+          echo "Fetching admin password..."
+          ADMIN_PASSWORD=$(kubectl -n argocd get secret trading-argocd-cluster \
+            -o jsonpath='{.data.admin\.password}' | base64 -d)
+          echo "::add-mask::$ADMIN_PASSWORD"
+          echo ""
+          echo "=========================================="
+          echo "ArgoCD Admin Credentials:"
+          echo "Username: admin"
+          echo "Password: $ADMIN_PASSWORD"
+          echo "=========================================="
+
+      - name: Verify ArgoCD Installation
+        run: |
+          echo "========================================"
+          echo "  ArgoCD Installation Summary"
+          echo "========================================"
+          echo "Namespace: argocd"
+          echo "ArgoCD UI: http://${{ inputs.control_plane_ip }}"
+          echo "Username: admin"
+          echo ""
+          echo "Pods:"
+          kubectl get pods -n argocd
+          echo ""
+          echo "Services:"
+          kubectl get svc -n argocd
+          echo "========================================"
+

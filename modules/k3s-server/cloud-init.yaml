@@ -36,13 +36,6 @@ write_files:
       kubectl get pods -n kafka
       kubectl get crd | grep kafka || echo "Strimzi CRDs installed"
       
-      # ============================================
-      # Install OLM + Argo CD Operator
-      # ============================================
-      install_olm
-      render_argocd_operator_manifests
-      deploy_argocd_operator
-      
       echo "$(date): K3s control plane setup complete"
       touch /root/k3s-ready.txt
       

@@ -178,12 +178,13 @@ infra/
    # Port forward
    kubectl port-forward svc/argocd-server -n argocd 8080:443
    
-   # Get admin password
-   kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+   # Get admin password (operator-managed secret)
+   kubectl -n argocd get secret trading-argocd-cluster -o jsonpath="{.data.admin\\.password}" | base64 -d
    
    # Open: https://localhost:8080
    # Login: admin / <password>
    ```
+   The Argo CD Operator stores the initial password in the `trading-argocd-cluster` secret and keeps it in sync with the control plane. Rotate the password by patching this secret; the operator propagates changes automatically.
 
 #### Step 3: Daily Cleanup (Cost Optimization)
 
