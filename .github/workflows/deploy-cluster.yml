@@ -13,21 +13,21 @@ on:
 
 jobs:
   provision:
-    uses: .github/workflows/01-reusable-provision-infra.yml
+    uses: trading-cz/infra/.github/workflows/01-reusable-provision-infra.yml@main
     with:
       environment: ${{ inputs.environment }}
     secrets: inherit
 
   verify_cluster:
     needs: provision
-    uses: .github/workflows/02-reusable-verify-cluster.yml
+    uses: trading-cz/infra/.github/workflows/02-reusable-verify-cluster.yml@main
     with:
       kubeconfig: ${{ needs.provision.outputs.kubeconfig }}
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
 
   deploy_argocd:
     needs: verify_cluster
-    uses: ./.github/workflows/03-reusable-deploy-argocd.yml
+    uses: trading-cz/infra/.github/workflows/03-reusable-deploy-argocd.yml@main
     with:
       kubeconfig: ${{ needs.provision.outputs.kubeconfig }}
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
@@ -37,7 +37,7 @@ jobs:
 
   deploy_strimzi:
     needs: deploy_argocd
-    uses: .github/workflows/04-reusable-deploy-strimzi.yml
+    uses: trading-cz/infra/.github/workflows/04-reusable-deploy-strimzi.yml@main
     with:
       kubeconfig: ${{ needs.provision.outputs.kubeconfig }}
 
