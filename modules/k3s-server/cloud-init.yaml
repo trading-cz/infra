@@ -16,11 +16,21 @@ write_files:
         --disable traefik \
         --disable servicelb
       
+      # Export kubeconfig for kubectl and helm
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      
       # Wait for K3s to be ready
       echo "$(date): Waiting for K3s to be ready..."
       until kubectl get nodes 2>/dev/null; do
         echo "Waiting for K3s API..."
         sleep 2
+      done
+      
+      # Wait for node to be ready (not just registered)
+      echo "$(date): Waiting for node to be Ready..."
+      until kubectl wait --for=condition=Ready node --all --timeout=60s 2>/dev/null; do
+        echo "Node not ready yet..."
+        sleep 5
       done
       
       echo "$(date): K3s server is ready"
