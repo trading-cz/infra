@@ -100,8 +100,13 @@ jobs:
             username: not-used
           EOF
           
-          kubectl apply -f app-of-apps/argocd/parent-app.yaml
-
+          PARENT_APP_PATH="app-of-apps/argocd/parent-app.yaml"
+          if [ ! -f "$PARENT_APP_PATH" ]; then
+            echo "❌ Parent app manifest $PARENT_APP_PATH not found"
+            ls app-of-apps/argocd || true
+            exit 1
+          fi
+          kubectl apply -f "$PARENT_APP_PATH"
       - name: Apply ArgoCD ingress
         run: |
           kubectl apply -f infra/modules/argocd-bootstrap/argocd-ingress.yaml
