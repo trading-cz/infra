@@ -3,26 +3,46 @@ name: 'Reusable: Deploy Strimzi'
 on:
   workflow_call:
     inputs:
-      kubeconfig:
-        description: 'Kubeconfig file content'
+      control_plane_ip:
+        description: 'Control Plane IP'
         required: true
         type: string
+    secrets:
+      ssh_private_key:
+        description: 'SSH private key for server access'
+        required: true
 
 jobs:
   deploy:
     name: Deploy and Verify Strimzi
     runs-on: ubuntu-latest
     steps:
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ssh_private_key }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
       - name: Install kubectl
         run: |
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
-      - name: Setup Kubeconfig
+      - name: Download Kubeconfig from Control Plane
         run: |
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
           mkdir -p ~/.kube
-          echo "${{ inputs.kubeconfig }}" > ~/.kube/config
+          
+          echo "📥 Downloading kubeconfig from $CONTROL_IP..."
+          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
+            sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
+            chmod 600 ~/.kube/config
+            echo "✅ Kubeconfig downloaded and configured"
+          else
+            echo "❌ Failed to download kubeconfig"
+            exit 1
+          fi
 
       - name: Verify Strimzi Kafka Operator
         run: |

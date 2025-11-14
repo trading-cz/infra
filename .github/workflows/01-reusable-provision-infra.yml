@@ -8,9 +8,6 @@ on:
         required: true
         type: string
     outputs:
-      kubeconfig:
-        description: "Kubeconfig file content"
-        value: ${{ jobs.provision.outputs.kubeconfig }}
       control_plane_ip:
         description: "Control Plane IP"
         value: ${{ jobs.provision.outputs.control_plane_ip }}
@@ -26,7 +23,6 @@ jobs:
     name: Provision ${{ inputs.environment }} infrastructure
     runs-on: ubuntu-latest
     outputs:
-      kubeconfig: ${{ steps.export_kubeconfig.outputs.kubeconfig }}
       control_plane_ip: ${{ steps.tf_output.outputs.control_ip }}
       kafka_ip: ${{ steps.tf_output.outputs.kafka_ip }}
 

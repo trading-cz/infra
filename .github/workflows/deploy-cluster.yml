@@ -22,25 +22,30 @@ jobs:
     needs: provision
     uses: trading-cz/infra/.github/workflows/02-reusable-verify-cluster.yml@main
     with:
-      kubeconfig: ${{ needs.provision.outputs.kubeconfig }}
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
+    secrets:
+      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
   deploy_argocd:
-    needs: verify_cluster
+    needs: [provision, verify_cluster]
+    if: needs.provision.result == 'success'
     uses: trading-cz/infra/.github/workflows/03-reusable-deploy-argocd.yml@main
     with:
-      kubeconfig: ${{ needs.provision.outputs.kubeconfig }}
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
       environment: ${{ inputs.environment }}
     secrets:
+      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
       argocd_admin_password: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}
       token_git_repo_config: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
 
   deploy_strimzi:
-    needs: deploy_argocd
+    needs: [provision, deploy_argocd]
+    if: needs.provision.result == 'success'
     uses: trading-cz/infra/.github/workflows/04-reusable-deploy-strimzi.yml@main
     with:
-      kubeconfig: ${{ needs.provision.outputs.kubeconfig }}
+      control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
+    secrets:
+      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
   summary:
     name: Deployment Summary
