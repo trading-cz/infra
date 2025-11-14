@@ -184,10 +184,49 @@ jobs:
 
       - name: Deploy ArgoCD Instance
         run: |
-          echo "Deploying ArgoCD CR from config repository..."
-          kubectl apply -k config/base/operators/argocd
+          echo "=========================================="
+          echo "Deploying ArgoCD CR from config repository"
+          echo "=========================================="
           
+          echo "ArgoCD CR file:"
+          cat config/base/operators/argocd/argocd.yaml
+          echo ""
+          
+          echo "Applying ArgoCD CR..."
+          if ! kubectl apply -k config/base/operators/argocd; then
+            echo ""
+            echo "❌ Failed to deploy ArgoCD CR"
+            echo ""
+            echo "Debugging information:"
+            echo "===================="
+            echo "Operator pod status:"
+            kubectl get pods -n argocd-operator-system
+            echo ""
+            echo "Operator logs (last 50 lines):"
+            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 || true
+            echo ""
+            echo "ArgoCD CRD version info:"
+            kubectl get crd argocds.argoproj.io -o yaml | grep -A 20 "versions:" || true
+            echo ""
+            echo "Available API versions for ArgoCD:"
+            kubectl api-resources | grep argocd || true
+            exit 1
+          fi
+          
+          echo "✅ ArgoCD CR deployed successfully"
+          echo ""
           echo "Waiting for ArgoCD components to be ready..."
+          
+          # Wait for ArgoCD server deployment (with retry)
+          echo "Waiting for ArgoCD server..."
+          for i in {1..12}; do
+            if kubectl get deployment trading-argocd-server -n argocd >/dev/null 2>&1; then
+              echo "✅ ArgoCD server deployment found"
+              break
+            fi
+            echo "⏳ Attempt $i/12: Waiting for ArgoCD server deployment to be created..."
+            sleep 5
+          done
           kubectl wait --for=condition=available --timeout=5m \
             deployment/trading-argocd-server -n argocd || true
           kubectl wait --for=condition=available --timeout=5m \
