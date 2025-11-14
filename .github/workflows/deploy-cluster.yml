@@ -540,8 +540,105 @@ jobs:
           ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "helm repo list" 2>/dev/null || echo "No repositories configured"
 
       # ============================================
-      # Display cluster information
+      # Deploy Kafka Broker Cluster
       # ============================================
+      - name: Deploy Kafka Broker via Strimzi
+        id: deploy_kafka
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          
+          echo "📦 Deploying Kafka cluster via Strimzi Operator..."
+          
+          # Select template based on environment
+          KAFKA_TEMPLATE="modules/strimzi/templates/${{ inputs.environment }}.yaml"
+          
+          if [ ! -f "$KAFKA_TEMPLATE" ]; then
+            echo "⚠️  Kafka template not found: $KAFKA_TEMPLATE"
+            echo "   Skipping Kafka broker deployment"
+            echo "status=skip" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Applying Kafka manifest from: $KAFKA_TEMPLATE"
+          kubectl apply -f "$KAFKA_TEMPLATE"
+          
+          echo ""
+          echo "⏳ Waiting for Kafka broker to be ready (max 5 minutes)..."
+          
+          # Wait for Kafka cluster to be ready
+          if kubectl wait --for=condition=ready kafka/trading-cluster -n kafka --timeout=300s 2>/dev/null; then
+            echo "✅ Kafka cluster is ready"
+            echo "status=pass" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  Kafka cluster not ready after 5 minutes (may still be initializing)"
+            echo "   Check status with: kubectl get kafka -n kafka"
+            echo "status=partial" >> $GITHUB_OUTPUT
+          fi
+          
+          echo ""
+          echo "📊 Kafka Cluster Status:"
+          kubectl get kafka -n kafka
+          echo ""
+          echo "📊 Kafka Broker Pods:"
+          kubectl get pods -n kafka -l app.kubernetes.io/name=kafka
+          echo ""
+          echo "📊 Kafka Services:"
+          kubectl get svc -n kafka
+
+      - name: Verify Kafka NodePort Accessibility
+        id: verify_kafka_nodeport
+        continue-on-error: true
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          
+          echo "🔍 Verifying Kafka external access..."
+          echo "   Target: $KAFKA_IP:33333 (external bootstrap)"
+          
+          # Wait a bit for services to stabilize
+          sleep 10
+          
+          echo ""
+          echo "📊 Kafka Bootstrap Service:"
+          kubectl get svc -n kafka -o wide | grep bootstrap || echo "Bootstrap service not found"
+          
+          echo ""
+          echo "📊 Kafka NodePort Details:"
+          BOOTSTRAP_SVC=$(kubectl get svc -n kafka -o name 2>/dev/null | grep bootstrap | head -1)
+          if [ -n "$BOOTSTRAP_SVC" ]; then
+            kubectl describe $BOOTSTRAP_SVC -n kafka
+            
+            # Extract actual NodePort
+            NODEPORT=$(kubectl get $BOOTSTRAP_SVC -n kafka -o jsonpath='{.spec.ports[?(@.name=="external")].nodePort}' 2>/dev/null)
+            if [ -z "$NODEPORT" ] || [ "$NODEPORT" == "null" ]; then
+              NODEPORT=$(kubectl get $BOOTSTRAP_SVC -n kafka -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)
+            fi
+            
+            if [ -n "$NODEPORT" ] && [ "$NODEPORT" != "null" ]; then
+              echo ""
+              echo "✅ NodePort extracted: $NODEPORT"
+              echo "   Access: $KAFKA_IP:$NODEPORT"
+              
+              # Try to connect (timeout if not ready)
+              echo ""
+              echo "Testing connectivity to Kafka bootstrap..."
+              if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$KAFKA_IP/$NODEPORT" 2>/dev/null; then
+                echo "✅ Kafka NodePort $NODEPORT is accessible from internet"
+                echo "status=pass" >> $GITHUB_OUTPUT
+              else
+                echo "⚠️  Kafka NodePort $NODEPORT not responding yet (broker may still be initializing)"
+                echo "status=partial" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "⚠️  Could not extract NodePort from service"
+              echo "status=fail" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️  Bootstrap service not found"
+            echo "status=fail" >> $GITHUB_OUTPUT
+          fi
+
       - name: Display cluster information
         run: |
           CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
@@ -582,8 +679,12 @@ jobs:
           echo ""
           echo "Strimzi Kafka Operator:"
           echo "  Version: 0.48.0 (Kafka 4.1.0 KRaft support)"
-          echo "  Deploy cluster: kubectl apply -f modules/strimzi/kafka-cluster-examples/dev.yaml"
-          echo "  Check status: kubectl get kafka -n kafka"
+          echo "  Kafka Broker: deployed via Strimzi KafkaCR"
+          echo ""
+          echo "Kafka Access:"
+          echo "  External (from internet): $KAFKA_IP:33333"
+          echo "  Internal (from pods): trading-cluster-kafka-bootstrap.kafka:9092"
+          echo "  Check status: kubectl get kafka -n kafka && kubectl get pods -n kafka"
           echo ""
           echo "========================================"
 
