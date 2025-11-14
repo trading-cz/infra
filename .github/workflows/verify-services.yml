@@ -239,6 +239,7 @@ jobs:
         continue-on-error: true
         run: |
           KAFKA_IP="${{ steps.detect_ips.outputs.kafka_ip }}"
+          CONTROL_IP="${{ steps.detect_ips.outputs.control_ip }}"
           
           if [ "$KAFKA_IP" == "N/A" ]; then
             echo "⏭️  Skipping Kafka K3s integration test (IP not available)"
@@ -246,12 +247,17 @@ jobs:
             exit 0
           fi
           
-          # Verify kubeconfig exists (should have been fetched in previous step)
+          # Fetch kubeconfig if it doesn't exist yet
           if [ ! -f "kubeconfig.yaml" ]; then
-            echo "❌ Kubeconfig not found - cannot test K3s integration"
-            echo "   This test depends on 'K3s Cluster Connection' step completing first"
-            echo "status=fail" >> $GITHUB_OUTPUT
-            exit 1
+            echo "📥 Fetching kubeconfig from control plane for K3s integration test..."
+            if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > kubeconfig.yaml 2>/dev/null; then
+              sed -i "s/127.0.0.1/$CONTROL_IP/g" kubeconfig.yaml
+              echo "✅ Kubeconfig fetched"
+            else
+              echo "❌ Failed to fetch kubeconfig - cannot test K3s integration"
+              echo "status=fail" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           fi
           
           export KUBECONFIG=$PWD/kubeconfig.yaml
