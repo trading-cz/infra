@@ -5,6 +5,26 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/bash
+      set -e  # Exit on error
+      
+      # ============================================
+      # Install K3s Server
+      # ============================================
+      echo "$(date): Installing K3s server..."
+      curl -sfL https://get.k3s.io | sh -s - \
+        --write-kubeconfig-mode 644 \
+        --disable traefik \
+        --disable servicelb
+      
+      # Wait for K3s to be ready
+      echo "$(date): Waiting for K3s to be ready..."
+      until kubectl get nodes 2>/dev/null; do
+        echo "Waiting for K3s API..."
+        sleep 2
+      done
+      
+      echo "$(date): K3s server is ready"
+      kubectl get nodes
 
       # ============================================
       # Install Helm 3
