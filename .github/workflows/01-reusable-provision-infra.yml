@@ -1,0 +1,129 @@
+name: 'Reusable: Provision Infrastructure'
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: string
+    outputs:
+      kubeconfig:
+        description: "Kubeconfig file content"
+        value: ${{ jobs.provision.outputs.kubeconfig }}
+      control_plane_ip:
+        description: "Control Plane IP"
+        value: ${{ jobs.provision.outputs.control_plane_ip }}
+      kafka_ip:
+        description: "Kafka Node IP"
+        value: ${{ jobs.provision.outputs.kafka_ip }}
+
+env:
+  TF_VERSION: '1.13.4'
+
+jobs:
+  provision:
+    name: Provision ${{ inputs.environment }} infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      kubeconfig: ${{ steps.export_kubeconfig.outputs.kubeconfig }}
+      control_plane_ip: ${{ steps.tf_output.outputs.control_ip }}
+      kafka_ip: ${{ steps.tf_output.outputs.kafka_ip }}
+
+    steps:
+      - name: Checkout Infra Repository
+        uses: actions/checkout@v4
+        with:
+          path: infra
+
+      - name: Setup Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+          hcloud version
+
+      - name: Setup SSH keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_ed25519.pub
+          chmod 600 ~/.ssh/id_ed25519
+          chmod 644 ~/.ssh/id_ed25519.pub
+
+      - name: Create or Get Primary IPs
+        id: primary_ips
+        run: |
+          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+          ENV="${{ inputs.environment }}"
+          CLUSTER="k3s-trading"
+          CONTROL_IP_NAME="${ENV}-${CLUSTER}-control-ip"
+          CONTROL_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$CONTROL_IP_NAME" | awk '{print $1}')
+          if [ -z "$CONTROL_IP_ID" ]; then
+            CONTROL_IP_ID=$(hcloud primary-ip create --type ipv4 --name "$CONTROL_IP_NAME" --datacenter nbg1-dc3 --label environment=$ENV --label cluster=$CLUSTER --label role=control-plane -o json | jq -r '.primary_ip.id')
+          fi
+          echo "control_plane_primary_ip_id=$CONTROL_IP_ID" >> $GITHUB_OUTPUT
+          
+          KAFKA_IP_NAME="${ENV}-${CLUSTER}-kafka-ip"
+          KAFKA_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$KAFKA_IP_NAME" | awk '{print $1}')
+          if [ -z "$KAFKA_IP_ID" ]; then
+            KAFKA_IP_ID=$(hcloud primary-ip create --type ipv4 --name "$KAFKA_IP_NAME" --datacenter nbg1-dc3 --label environment=$ENV --label cluster=$CLUSTER --label role=kafka -o json | jq -r '.primary_ip.id')
+          fi
+          echo "kafka_primary_ip_id=$KAFKA_IP_ID" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: infra
+        run: terraform apply -auto-approve -var-file="environments/${{ inputs.environment }}.tfvars"
+        env:
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_control_plane_primary_ip_id: ${{ steps.primary_ips.outputs.control_plane_primary_ip_id }}
+          TF_VAR_kafka_primary_ip_id: ${{ steps.primary_ips.outputs.kafka_primary_ip_id }}
+
+      - name: Extract Terraform Outputs
+        id: tf_output
+        working-directory: infra
+        run: |
+          CONTROL_IP=$(terraform output -raw k3s_control_public_ip)
+          KAFKA_IP=$(terraform output -json kafka_server_public_ips | jq -r '.[0]')
+          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+          echo "kafka_ip=$KAFKA_IP" >> $GITHUB_OUTPUT
+
+      - name: Verify SSH and Cloud-init
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          for i in {1..30}; do ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "echo 'SSH ready'" 2>/dev/null && break; sleep 10; done
+          for i in {1..30}; do ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "echo 'SSH ready'" 2>/dev/null && break; sleep 10; done
+          for i in {1..60}; do ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "test -f /root/k3s-ready.txt" 2>/dev/null && break; sleep 5; done
+          K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null)
+          ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"
+          for i in {1..60}; do ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null && break; sleep 5; done
+
+      - name: Get Kubeconfig
+        id: get_kubeconfig
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          mkdir -p $HOME/.kube
+          ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > $HOME/.kube/config
+          sed -i "s/127.0.0.1/$CONTROL_IP/g" $HOME/.kube/config
+          echo "kubeconfig_path=$HOME/.kube/config" >> $GITHUB_OUTPUT
+
+      - name: Export Kubeconfig content
+        id: export_kubeconfig
+        run: |
+          KUBECONFIG_CONTENT=$(cat ${{ steps.get_kubeconfig.outputs.kubeconfig_path }})
+          # This is a trick to set a multiline output
+          echo "kubeconfig<<EOF" >> $GITHUB_OUTPUT
+          echo "$KUBECONFIG_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
