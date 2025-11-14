@@ -401,7 +401,6 @@ jobs:
         continue-on-error: true
         run: |
           export KUBECONFIG=$PWD/kubeconfig.yaml
-          
           echo "🔍 Checking K3s system pods (kube-system namespace)..."
           
           kubectl get pods -n kube-system -o wide
