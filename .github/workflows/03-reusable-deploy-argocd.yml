@@ -51,13 +51,51 @@ jobs:
         run: |
           mkdir -p ~/.kube
           echo "${{ inputs.kubeconfig }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+          echo "Verifying kubeconfig..."
+          if [ ! -s ~/.kube/config ]; then
+            echo "ERROR: Kubeconfig file is empty!"
+            exit 1
+          fi
+          
+          echo "Testing cluster connection..."
+          kubectl cluster-info || {
+            echo "ERROR: Cannot connect to cluster"
+            echo "Kubeconfig content (first 5 lines):"
+            head -n 5 ~/.kube/config
+            exit 1
+          }
+          
+          echo "Cluster connection successful!"
+          kubectl version --short
 
       - name: Install ArgoCD Operator
+        env:
+          KUBECONFIG: /home/runner/.kube/config
         run: |
           echo "=========================================="
           echo "Installing ArgoCD Operator v0.15.0"
           echo "Method: kubectl apply (manual installation)"
           echo "=========================================="
+          
+          # Verify kubectl can connect
+          echo "Verifying cluster connectivity..."
+          kubectl get nodes || {
+            echo "ERROR: Cannot connect to Kubernetes cluster"
+            echo "KUBECONFIG: $KUBECONFIG"
+            exit 1
+          }
+          
+          echo ""
+          echo "Current cluster state:"
+          echo "Namespaces:"
+          kubectl get namespaces
+          echo ""
+          echo "Existing ArgoCD resources:"
+          kubectl get all -n argocd 2>/dev/null || echo "No resources in argocd namespace"
+          kubectl get all -n argocd-operator-system 2>/dev/null || echo "No resources in argocd-operator-system namespace"
+          echo ""
           
           # Download and extract the operator release
           OPERATOR_VERSION="v0.15.0"
@@ -67,8 +105,11 @@ jobs:
           echo "Extracting archive..."
           tar -xzf argocd-operator.tar.gz
           
+          echo ""
           echo "Deploying operator using kustomize..."
-          kubectl create namespace argocd || echo "Namespace argocd already exists"
+          kubectl create namespace argocd 2>/dev/null || echo "Namespace argocd already exists"
+          kubectl create namespace argocd-operator-system 2>/dev/null || echo "Namespace argocd-operator-system already exists"
+          
           kubectl apply -k argocd-operator-${OPERATOR_VERSION#v}/config/default
           
           echo ""
