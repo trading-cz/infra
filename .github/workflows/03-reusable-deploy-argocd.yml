@@ -276,41 +276,44 @@ jobs:
         run: |
           echo "Configuring ArgoCD admin password..."
           
-          # Find the correct secret name (operator might use different naming)
-          SECRET_NAME=$(kubectl get secret -n argocd -o name | grep -E "argocd.*cluster|argocd.*secret" | head -1 | cut -d'/' -f2)
+          # Find the correct secret name
+          SECRET_NAME=$(kubectl get secret -n argocd -o name 2>/dev/null | grep -E "argocd-secret|argocd.*cluster" | head -1 | cut -d'/' -f2)
           
           if [ -z "$SECRET_NAME" ]; then
-            echo "⚠️  No ArgoCD secret found, checking all secrets..."
+            echo "⚠️  No ArgoCD secret found yet, waiting..."
+            sleep 5
+            SECRET_NAME=$(kubectl get secret -n argocd -o name 2>/dev/null | grep -E "argocd-secret|argocd.*cluster" | head -1 | cut -d'/' -f2)
+          fi
+          
+          if [ -z "$SECRET_NAME" ]; then
+            echo "❌ Still no ArgoCD secret found"
             kubectl get secrets -n argocd
-            echo ""
-            echo "Looking for initial admin password in pods..."
-            ADMIN_POD=$(kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server -o name | head -1)
-            if [ -n "$ADMIN_POD" ]; then
-              echo "Extracting initial password from server pod..."
-              kubectl exec -n argocd $ADMIN_POD -- cat /app/config/argocd-secret/admin.password 2>/dev/null || echo "Could not extract password"
+            exit 1
+          fi
+          
+          echo "Found secret: $SECRET_NAME"
+          
+          if [ -n "$ADMIN_PASSWORD" ]; then
+            echo "Setting custom admin password from GitHub secret..."
+            
+            # ArgoCD expects bcrypt hash - use Python to generate it
+            BCRYPT_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'$ADMIN_PASSWORD', bcrypt.gensalt()).decode())" 2>/dev/null || echo "")
+            
+            if [ -n "$BCRYPT_HASH" ]; then
+              echo "Generated bcrypt hash, updating secret..."
+              kubectl -n argocd patch secret $SECRET_NAME --type='json' \
+                -p="[{\"op\": \"replace\", \"path\": \"/data/admin.password\", \"value\": \"$(echo -n "$BCRYPT_HASH" | base64 -w0)\"}]"
+              echo "✅ Custom admin password set successfully"
+            else
+              echo "⚠️  bcrypt not available, setting plaintext password..."
+              echo "   ArgoCD will hash it on first login"
+              kubectl -n argocd patch secret $SECRET_NAME --type='json' \
+                -p="[{\"op\": \"replace\", \"path\": \"/data/admin.password\", \"value\": \"$(echo -n "$ADMIN_PASSWORD" | base64 -w0)\"}]"
+              echo "✅ Password set (will be hashed by ArgoCD)"
             fi
           else
-            echo "Found secret: $SECRET_NAME"
-            
-            if [ -n "$ADMIN_PASSWORD" ]; then
-              echo "Setting custom admin password from GitHub secret..."
-              # Hash the password using bcrypt (ArgoCD expects bcrypt hash)
-              BCRYPT_HASH=$(kubectl run --rm -i bcrypt-hash --image=argoproj/argocd:latest --restart=Never -- \
-                bash -c "echo -n '$ADMIN_PASSWORD' | argocd account bcrypt" 2>/dev/null || echo "")
-              
-              if [ -n "$BCRYPT_HASH" ]; then
-                kubectl -n argocd patch secret $SECRET_NAME \
-                  -p "{\"stringData\": {\"admin.password\": \"$BCRYPT_HASH\"}}"
-                echo "✅ Custom admin password set successfully"
-              else
-                echo "⚠️  Could not hash password, setting plaintext (ArgoCD will hash it)..."
-                kubectl -n argocd patch secret $SECRET_NAME \
-                  -p "{\"stringData\": {\"admin.password\": \"$ADMIN_PASSWORD\"}}"
-                echo "✅ Password set (ArgoCD will hash on first use)"
-              fi
-            else
-              echo "ℹ️  No custom password provided, using ArgoCD default"
-            fi
+            echo "ℹ️  No custom password provided, using ArgoCD default"
+            echo "   Get initial password with: kubectl -n argocd get secret $SECRET_NAME -o jsonpath='{.data.admin\\.password}' | base64 -d"
           fi
 
       - name: Get Initial Admin Password
