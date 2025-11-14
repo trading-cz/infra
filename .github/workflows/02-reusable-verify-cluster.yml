@@ -51,19 +51,35 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Traefik Ingress
+      - name: Verify Traefik Ingress Controller
         run: |
-          if kubectl get deployment traefik -n kube-system 2>/dev/null; then
-            echo "✅ Traefik deployment found in kube-system"
-            TRAEFIK_READY=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik --no-headers | grep Running | wc -l)
-            if [ "$TRAEFIK_READY" -ge 1 ]; then
-              echo "✅ Traefik is running ($TRAEFIIK_READY pods)"
-            else
-              echo "⚠️ Traefik pods not running yet"
-            fi
+          echo "Checking Traefik ingress controller..."
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=traefik -n kube-system --timeout=300s || true
+          TRAEFIK_COUNT=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik --no-headers | grep Running | wc -l)
+          if [ "$TRAEFIK_COUNT" -ge 1 ]; then
+            echo "✅ Traefik ingress controller running ($TRAEFIK_COUNT pods)"
           else
-            echo "⚠️ Traefik not found"
+            echo "⚠️  Traefik not running - ingress may not work"
           fi
+          
+          echo ""
+          echo "Traefik service:"
+          kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik || true
+
+      - name: Verify Strimzi Operator
+        run: |
+          echo "Checking Strimzi Kafka Operator..."
+          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
+          STRIMZI_COUNT=$(kubectl get pods -n kafka -l name=strimzi-cluster-operator --no-headers | grep Running | wc -l)
+          if [ "$STRIMZI_COUNT" -ge 1 ]; then
+            echo "✅ Strimzi operator running ($STRIMZI_COUNT pods)"
+          else
+            echo "⚠️  Strimzi operator not running"
+          fi
+          
+          echo ""
+          echo "Strimzi CRDs:"
+          kubectl get crd | grep kafka.strimzi.io || echo "⚠️  No Strimzi CRDs found"
           
       - name: Verify Network Ports
         run: |
@@ -73,3 +89,15 @@ jobs:
             echo "❌ K3s API port 6443 is not accessible"
             exit 1
           fi
+
+      - name: Label Kafka Nodes
+        run: |
+          echo "Labeling Kafka nodes for workload placement..."
+          for node in $(kubectl get nodes -o name | grep kafka); do
+            NODE_NAME=$(echo $node | cut -d'/' -f2)
+            kubectl label node "$NODE_NAME" workload=kafka --overwrite
+            echo "✅ Labeled $NODE_NAME with workload=kafka"
+          done
+          echo ""
+          echo "Node labels:"
+          kubectl get nodes --show-labels

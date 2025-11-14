@@ -53,29 +53,14 @@ write_files:
       echo "$(date): Waiting for K3s agent to be ready..."
       timeout 120 bash -c 'until systemctl is-active k3s-agent 2>/dev/null; do sleep 5; done'
       
-      echo "$(date): Labeling node for Kafka workloads..."
-      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-      NODE_NAME=$(hostname)
-      
-      # Wait for node to appear in cluster
-      for i in $(seq 1 30); do
-        if kubectl get node "$NODE_NAME" 2>/dev/null; then
-          echo "$(date): Node registered in cluster"
-          break
-        fi
-        echo "$(date): Attempt $i/30: Waiting for node registration..."
-        sleep 2
-      done
-      
-      # Add workload label for Strimzi Kafka
-      if kubectl get node "$NODE_NAME" 2>/dev/null; then
-        kubectl label node "$NODE_NAME" workload=kafka --overwrite 2>/dev/null || echo "Could not label node"
-        echo "$(date): Node labeled with workload=kafka"
-      else
-        echo "$(date): WARNING: Node not found in cluster, skipping label"
-      fi
+      echo "$(date): Verifying K3s agent is running..."
+      systemctl status k3s-agent --no-pager || true
       
       echo "$(date): K3s agent setup complete"
+      echo "$(date): Node will appear in cluster shortly"
+      echo "$(date): To label this node, run from control plane:"
+      echo "  kubectl label node $(hostname) workload=kafka"
+      
       touch /root/k3s-agent-ready.txt
       echo "$(date): Cloud-init completed successfully"
 
