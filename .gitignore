@@ -39,3 +39,7 @@ Thumbs.db
 # Backup files
 *.backup
 *.bak
+# Downloaded tools
+actionlint*
+man/
+LICENSE.txt
