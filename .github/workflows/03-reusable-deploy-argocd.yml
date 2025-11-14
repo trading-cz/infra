@@ -52,71 +52,88 @@ jobs:
           mkdir -p ~/.kube
           echo "${{ inputs.kubeconfig }}" > ~/.kube/config
 
-      - name: Install ArgoCD Operator
+      - name: Install Helm
+        run: |
+          echo "Installing Helm..."
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      - name: Install ArgoCD via Helm
         run: |
           echo "=========================================="
-          echo "Installing ArgoCD Operator v0.15.0"
-          echo "Method: kubectl apply (manual installation)"
+          echo "Installing ArgoCD via Helm"
+          echo "Method: Helm chart from official repository"
           echo "=========================================="
           
-          # Download and extract the operator release
-          OPERATOR_VERSION="v0.15.0"
-          echo "Downloading ArgoCD Operator ${OPERATOR_VERSION}..."
-          curl -sL "https://github.com/argoproj-labs/argocd-operator/archive/refs/tags/${OPERATOR_VERSION}.tar.gz" -o argocd-operator.tar.gz
-          
-          echo "Extracting archive..."
-          tar -xzf argocd-operator.tar.gz
-          
-          echo "Deploying operator using kustomize..."
+          # Create namespace
           kubectl create namespace argocd || echo "Namespace argocd already exists"
-          kubectl apply -k argocd-operator-${OPERATOR_VERSION#v}/config/default
+          
+          # Add ArgoCD Helm repository
+          echo "Adding ArgoCD Helm repository..."
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm repo update
+          
+          # Install ArgoCD
+          echo "Installing ArgoCD..."
+          helm install argocd argo/argo-cd \
+            --namespace argocd \
+            --version 7.7.9 \
+            --set server.service.type=NodePort \
+            --set server.service.nodePortHttp=80 \
+            --wait --timeout 10m
           
           echo ""
-          echo "Waiting for operator to be ready..."
+          echo "Verifying ArgoCD installation..."
+          kubectl get pods -n argocd
+          kubectl get svc -n argocd
+          
+          echo ""
+          echo "Waiting for ArgoCD server to be ready..."
           kubectl wait --for=condition=available --timeout=5m \
-            deployment/argocd-operator-controller-manager \
-            -n argocd-operator-system || {
-              echo "ERROR: Operator deployment failed to become ready"
+            deployment/argocd-server -n argocd || {
+              echo "ERROR: ArgoCD server deployment failed to become ready"
               echo "Deployment status:"
-              kubectl get deployment -n argocd-operator-system
+              kubectl get deployment -n argocd
               echo ""
               echo "Pod status:"
-              kubectl get pods -n argocd-operator-system
+              kubectl get pods -n argocd
               echo ""
               echo "Pod logs:"
-              kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50
+              kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server --tail=50
               exit 1
             }
           
           echo ""
-          echo "Verifying operator installation..."
-          kubectl get pods -n argocd-operator-system
-          
-          echo ""
-          echo "Checking ArgoCD CRDs..."
-          kubectl get crd | grep argoproj || {
-            echo "WARNING: ArgoCD CRDs not found"
-            kubectl get crd
-            exit 1
-          }
-          
-          echo ""
           echo "=========================================="
-          echo "ArgoCD Operator installed successfully!"
+          echo "ArgoCD installed successfully via Helm!"
           echo "=========================================="
 
-      - name: Deploy ArgoCD Instance
+      - name: Configure ArgoCD
         run: |
-          echo "Deploying ArgoCD CR from config repository..."
-          kubectl apply -k config/base/operators/argocd
+          echo "Checking ArgoCD components status..."
+          kubectl get pods -n argocd
+          
+          # Apply any custom configuration from config repository if it exists
+          if [ -d "config/base/operators/argocd" ]; then
+            echo "Applying custom ArgoCD configuration from config repository..."
+            # Filter out ArgoCD CR files as we're using Helm
+            find config/base/operators/argocd -name "*.yaml" -o -name "*.yml" | while read file; do
+              # Skip files that contain 'kind: ArgoCD' as they're operator-specific
+              if ! grep -q "kind: ArgoCD" "$file" 2>/dev/null; then
+                kubectl apply -f "$file" || echo "Skipping $file"
+              fi
+            done
+          else
+            echo "No custom configuration found in config repository"
+          fi
           
           echo "Waiting for ArgoCD components to be ready..."
           kubectl wait --for=condition=available --timeout=5m \
-            deployment/trading-argocd-server -n argocd || true
+            deployment/argocd-server -n argocd || true
           kubectl wait --for=condition=available --timeout=5m \
-            deployment/trading-argocd-repo-server -n argocd || true
+            deployment/argocd-repo-server -n argocd || true
           kubectl wait --for=condition=available --timeout=5m \
-            deployment/trading-argocd-redis -n argocd || true
+            deployment/argocd-redis -n argocd || true
 
       - name: Configure ArgoCD Admin Password
         if: inputs.environment == 'prod' || github.event.inputs.argocd_admin_password != ''
@@ -125,16 +142,27 @@ jobs:
         run: |
           if [ -n "$ADMIN_PASSWORD" ]; then
             echo "Setting custom admin password..."
-            kubectl -n argocd patch secret trading-argocd-cluster \
-              -p "{\"stringData\": {\"admin.password\": \"$ADMIN_PASSWORD\"}}"
+            # Hash the password using bcrypt
+            BCRYPT_PASSWORD=$(htpasswd -nbBC 10 "" "$ADMIN_PASSWORD" | tr -d ':\n' | sed 's/$2y/$2a/')
+            kubectl -n argocd patch secret argocd-secret \
+              -p "{\"stringData\": {\"admin.password\": \"$BCRYPT_PASSWORD\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
             echo "Admin password updated successfully"
           fi
 
       - name: Get Initial Admin Password
         run: |
           echo "Fetching admin password..."
-          ADMIN_PASSWORD=$(kubectl -n argocd get secret trading-argocd-cluster \
-            -o jsonpath='{.data.admin\.password}' | base64 -d)
+          # Wait a moment for the secret to be created
+          sleep 5
+          ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || echo "")
+          
+          if [ -z "$ADMIN_PASSWORD" ]; then
+            echo "Initial admin secret not found, checking argocd-secret..."
+            ADMIN_PASSWORD=$(kubectl -n argocd get secret argocd-secret \
+              -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d || echo "admin")
+          fi
+          
           echo "::add-mask::$ADMIN_PASSWORD"
           echo ""
           echo "=========================================="
