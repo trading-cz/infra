@@ -17,7 +17,7 @@ on:
         options: [list, destroy-cluster, destroy-all]
   schedule:
     # Runs every hour at 55 minutes past
-    - cron: '55 * * * *'
+    - cron: '40 * * * *'
 
 
 jobs:
