@@ -1,5 +1,0 @@
-# Ignore generated files with secrets
-repository-secret.yaml
-
-# Keep only the template
-!repository-secret.yaml.template

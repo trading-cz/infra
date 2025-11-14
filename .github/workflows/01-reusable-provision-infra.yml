@@ -103,12 +103,270 @@ jobs:
         run: |
           CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
           KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
-          for i in {1..30}; do ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "echo 'SSH ready'" 2>/dev/null && break; sleep 10; done
-          for i in {1..30}; do ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "echo 'SSH ready'" 2>/dev/null && break; sleep 10; done
-          for i in {1..60}; do ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "test -f /root/k3s-ready.txt" 2>/dev/null && break; sleep 5; done
+          
+          echo "=========================================="
+          echo "Step 1: Waiting for SSH on Control Plane ($CONTROL_IP)"
+          echo "=========================================="
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "echo 'SSH ready'" 2>/dev/null; then
+              echo "✅ SSH accessible on control plane (attempt $i)"
+              break
+            fi
+            echo "⏳ Attempt $i/30 failed, retrying in 10s..."
+            sleep 10
+            if [ $i -eq 30 ]; then
+              echo "❌ SSH not accessible on control plane after 5 minutes"
+              exit 1
+            fi
+          done
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 2: Waiting for SSH on Kafka Node ($KAFKA_IP)"
+          echo "=========================================="
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "echo 'SSH ready'" 2>/dev/null; then
+              echo "✅ SSH accessible on kafka node (attempt $i)"
+              break
+            fi
+            echo "⏳ Attempt $i/30 failed, retrying in 10s..."
+            sleep 10
+            if [ $i -eq 30 ]; then
+              echo "❌ SSH not accessible on kafka node after 5 minutes"
+              exit 1
+            fi
+          done
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 3: Waiting for K3s Control Plane Installation"
+          echo "Checking for: /root/k3s-ready.txt"
+          echo "=========================================="
+          for i in {1..60}; do
+            if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "test -f /root/k3s-ready.txt" 2>/dev/null; then
+              echo "✅ K3s control plane ready (attempt $i)"
+              echo ""
+              echo "Cloud-init log (last 30 lines):"
+              ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "tail -30 /var/log/cloud-init-output.log" || true
+              break
+            fi
+            echo "⏳ Attempt $i/60 - K3s not ready yet, retrying in 5s..."
+            if [ $i -eq 60 ]; then
+              echo "❌ K3s control plane not ready after 5 minutes"
+              echo ""
+              echo "📋 Debugging Information:"
+              echo "Cloud-init status:"
+              ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cloud-init status" || true
+              echo ""
+              echo "Cloud-init output (last 50 lines):"
+              ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "tail -50 /var/log/cloud-init-output.log" || true
+              echo ""
+              echo "Files in /root:"
+              ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ls -la /root/" || true
+              exit 1
+            fi
+            sleep 5
+          done
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 4: Retrieving K3s Token"
+          echo "=========================================="
           K3S_TOKEN=$(ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "cat /var/lib/rancher/k3s/server/node-token" 2>/dev/null)
-          ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"
-          for i in {1..60}; do ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null && break; sleep 5; done
+          if [ -z "$K3S_TOKEN" ]; then
+            echo "❌ Failed to retrieve K3s token"
+            echo "Token file contents:"
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ls -la /var/lib/rancher/k3s/server/" || true
+            exit 1
+          fi
+          echo "✅ K3s token retrieved (length: ${#K3S_TOKEN})"
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 5: Distributing K3s Token to Kafka Node"
+          echo "=========================================="
+          if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"; then
+            echo "✅ Token distributed to kafka node"
+          else
+            echo "❌ Failed to distribute token"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 6: Waiting for Kafka Node to Join Cluster"
+          echo "Checking for: /root/k3s-agent-ready.txt"
+          echo "=========================================="
+          for i in {1..60}; do
+            if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null; then
+              echo "✅ Kafka node joined cluster (attempt $i)"
+              echo ""
+              echo "Cloud-init log (last 30 lines):"
+              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "tail -30 /var/log/cloud-init-output.log" || true
+              break
+            fi
+            echo "⏳ Attempt $i/60 - Agent not ready yet, retrying in 5s..."
+            if [ $i -eq 60 ]; then
+              echo "❌ Kafka node agent not ready after 5 minutes"
+              echo ""
+              echo "📋 Debugging Information:"
+              echo "Cloud-init status:"
+              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "cloud-init status" || true
+              echo ""
+              echo "Cloud-init output (last 50 lines):"
+              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "tail -50 /var/log/cloud-init-output.log" || true
+              echo ""
+              echo "Files in /root:"
+              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "ls -la /root/" || true
+              echo ""
+              echo "Token file check:"
+              ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "ls -la /tmp/k3s-token" || true
+              exit 1
+            fi
+            sleep 5
+          done
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ All verification steps completed successfully"
+          echo "=========================================="
+
+      - name: Deep Debug on Failure
+        if: failure()
+        run: |
+          CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
+          KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          
+          echo "============================================"
+          echo "🔍 COMPREHENSIVE DEBUG INFORMATION"
+          echo "============================================"
+          echo ""
+          
+          if [ -n "$CONTROL_IP" ]; then
+            echo "============================================"
+            echo "CONTROL PLANE: $CONTROL_IP"
+            echo "============================================"
+            
+            echo ""
+            echo "--- System Information ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "uname -a" 2>&1 || echo "❌ Cannot connect"
+            
+            echo ""
+            echo "--- Cloud-init Status ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "cloud-init status --long" 2>&1 || echo "❌ Cloud-init status unavailable"
+            
+            echo ""
+            echo "--- Full Cloud-init Output Log ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "cat /var/log/cloud-init-output.log" 2>&1 || echo "❌ Log unavailable"
+            
+            echo ""
+            echo "--- Cloud-init Errors ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "grep -i error /var/log/cloud-init-output.log || echo 'No errors found'" 2>&1 || true
+            
+            echo ""
+            echo "--- Files in /root ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "ls -laht /root/" 2>&1 || echo "❌ Cannot list files"
+            
+            echo ""
+            echo "--- K3s Service Status ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "systemctl status k3s --no-pager" 2>&1 || echo "❌ K3s service not found"
+            
+            echo ""
+            echo "--- K3s Service Logs (last 50 lines) ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "journalctl -u k3s -n 50 --no-pager" 2>&1 || echo "❌ K3s logs unavailable"
+            
+            echo ""
+            echo "--- K3s Server Directory ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "ls -la /var/lib/rancher/k3s/server/" 2>&1 || echo "❌ Directory not found"
+            
+            echo ""
+            echo "--- Running Processes ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "ps aux | grep -E 'k3s|helm|cloud-init' | grep -v grep" 2>&1 || echo "❌ Cannot list processes"
+            
+            echo ""
+            echo "--- Disk Usage ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "df -h" 2>&1 || echo "❌ Cannot check disk"
+            
+            echo ""
+            echo "--- Memory Usage ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "free -h" 2>&1 || echo "❌ Cannot check memory"
+            
+            echo ""
+            echo "--- Network Interfaces ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "ip addr show" 2>&1 || echo "❌ Cannot show network"
+            
+            echo ""
+            echo "--- Setup Script (if exists) ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$CONTROL_IP "cat /root/setup-k3s.sh" 2>&1 || echo "❌ Setup script not found"
+          else
+            echo "❌ CONTROL_IP not set - cannot debug control plane"
+          fi
+          
+          echo ""
+          echo "============================================"
+          echo "KAFKA NODE: $KAFKA_IP"
+          echo "============================================"
+          
+          if [ -n "$KAFKA_IP" ]; then
+            echo ""
+            echo "--- System Information ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "uname -a" 2>&1 || echo "❌ Cannot connect"
+            
+            echo ""
+            echo "--- Cloud-init Status ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "cloud-init status --long" 2>&1 || echo "❌ Cloud-init status unavailable"
+            
+            echo ""
+            echo "--- Full Cloud-init Output Log ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "cat /var/log/cloud-init-output.log" 2>&1 || echo "❌ Log unavailable"
+            
+            echo ""
+            echo "--- Cloud-init Errors ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "grep -i error /var/log/cloud-init-output.log || echo 'No errors found'" 2>&1 || true
+            
+            echo ""
+            echo "--- Files in /root ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "ls -laht /root/" 2>&1 || echo "❌ Cannot list files"
+            
+            echo ""
+            echo "--- K3s Agent Service Status ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "systemctl status k3s-agent --no-pager" 2>&1 || echo "❌ K3s agent service not found"
+            
+            echo ""
+            echo "--- K3s Agent Service Logs (last 50 lines) ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "journalctl -u k3s-agent -n 50 --no-pager" 2>&1 || echo "❌ K3s agent logs unavailable"
+            
+            echo ""
+            echo "--- Token File Check ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "ls -la /tmp/k3s-token && echo 'Token content (masked):' && wc -c /tmp/k3s-token" 2>&1 || echo "❌ Token file not found"
+            
+            echo ""
+            echo "--- Running Processes ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "ps aux | grep -E 'k3s|cloud-init' | grep -v grep" 2>&1 || echo "❌ Cannot list processes"
+            
+            echo ""
+            echo "--- Disk Usage ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "df -h" 2>&1 || echo "❌ Cannot check disk"
+            
+            echo ""
+            echo "--- Memory Usage ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "free -h" 2>&1 || echo "❌ Cannot check memory"
+            
+            echo ""
+            echo "--- Network Interfaces ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "ip addr show" 2>&1 || echo "❌ Cannot show network"
+            
+            echo ""
+            echo "--- Setup Script (if exists) ---"
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "cat /root/setup-k3s-agent.sh" 2>&1 || echo "❌ Setup script not found"
+          else
+            echo "❌ KAFKA_IP not set - cannot debug kafka node"
+          fi
+          
+          echo ""
+          echo "============================================"
+          echo "🔍 DEBUG INFORMATION COLLECTION COMPLETE"
+          echo "============================================"
 
       - name: Get Kubeconfig
         id: get_kubeconfig
