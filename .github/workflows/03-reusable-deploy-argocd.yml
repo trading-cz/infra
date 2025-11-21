@@ -78,6 +78,17 @@ jobs:
 
       - name: Verify ArgoCD Instance
         run: |
+          echo "⏳ Waiting for ArgoCD Server deployment creation..."
+          # Wait for the operator to create the deployment (async operation)
+          for i in {1..60}; do
+            if kubectl get deployment/trading-argocd-server -n argocd &> /dev/null; then
+              echo "✅ Deployment found!"
+              break
+            fi
+            echo "Waiting for deployment creation... ($i/60)"
+            sleep 2
+          done
+
           echo "⏳ Waiting for ArgoCD Server (trading-argocd-server)..."
           # The operator creates resources with the CR name as prefix
           kubectl wait --for=condition=available deployment/trading-argocd-server -n argocd --timeout=300s
