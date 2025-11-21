@@ -261,17 +261,31 @@ jobs:
           echo "Verification Step 2: ArgoCD Components Created"
           echo "=========================================="
           
-          EXPECTED_COMPONENTS=("trading-argocd-server" "trading-argocd-repo-server" "trading-argocd-redis" "trading-argocd-application-controller")
+          # First check if operator is still running
+          echo "Checking if operator is still running..."
+          OPERATOR_PODS=$(kubectl get pods -n argocd-operator-system --no-headers 2>/dev/null | wc -l)
           
-          echo "Checking operator logs for any errors..."
-          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 | head -20
-          echo ""
+          if [ "$OPERATOR_PODS" -eq 0 ]; then
+            echo "❌ Operator pods not found! Reinstalling operator..."
+            
+            OPERATOR_VERSION="v0.15.0"
+            curl -sL "https://github.com/argoproj-labs/argocd-operator/archive/refs/tags/${OPERATOR_VERSION}.tar.gz" -o argocd-operator.tar.gz
+            tar -xzf argocd-operator.tar.gz
+            
+            echo "Redeploying operator..."
+            kubectl kustomize argocd-operator-${OPERATOR_VERSION#v}/config/default | kubectl apply -f - --server-side=true --force-conflicts
+            
+            echo "Waiting for operator to start..."
+            sleep 15
+          fi
+          
+          EXPECTED_COMPONENTS=("trading-argocd-server" "trading-argocd-repo-server" "trading-argocd-redis" "trading-argocd-application-controller")
           
           echo "Waiting for all ArgoCD components to be created..."
           ATTEMPT=0
           FOUND_COMPONENTS=0
           
-          while [ $ATTEMPT -lt 90 ]; do
+          while [ $ATTEMPT -lt 120 ]; do
             FOUND_COMPONENTS=0
             for COMP in "${EXPECTED_COMPONENTS[@]}"; do
               if kubectl get deployment "$COMP" -n argocd &>/dev/null 2>&1 || \
@@ -286,19 +300,6 @@ jobs:
             fi
             
             echo "  Attempt $((ATTEMPT+1))/120: Found $FOUND_COMPONENTS/${#EXPECTED_COMPONENTS[@]} components..."
-            
-            # Every 10 attempts, show debug info
-            if [ $((ATTEMPT % 10)) -eq 0 ] && [ $ATTEMPT -gt 0 ]; then
-              echo ""
-              echo "  Debug info (attempt $ATTEMPT):"
-              echo "    ArgoCD CR status:"
-              kubectl get argocd trading-argocd -n argocd -o jsonpath='{.status}' | head -c 200
-              echo ""
-              echo "    Recent operator logs:"
-              kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=5 || true
-              echo ""
-            fi
-            
             sleep 1
             ((ATTEMPT++))
           done
@@ -310,10 +311,13 @@ jobs:
             echo "Available resources in argocd namespace:"
             kubectl get all -n argocd
             echo ""
-            echo "Operator logs (last 100 lines):"
-            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=100 || true
+            echo "Operator status:"
+            kubectl get pods -n argocd-operator-system 2>/dev/null || echo "Operator namespace empty"
             echo ""
-            echo "ArgoCD CR full details:"
+            echo "Operator logs (if available):"
+            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 2>/dev/null || echo "No logs found"
+            echo ""
+            echo "ArgoCD CR:"
             kubectl get argocd trading-argocd -n argocd -o yaml || true
             exit 1
           fi
@@ -321,6 +325,7 @@ jobs:
           echo ""
           echo "Component status:"
           kubectl get all -n argocd
+          echo "=========================================="
           echo "=========================================="
 
       - name: 'Verification Step 3: ArgoCD Components Ready'
