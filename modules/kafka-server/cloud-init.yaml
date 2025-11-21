@@ -43,7 +43,8 @@ write_files:
       if [ -n "$K3S_TOKEN" ]; then
         curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable \
           K3S_URL="https://$K3S_SERVER_IP:6443" \
-          K3S_TOKEN="$K3S_TOKEN" sh -
+          K3S_TOKEN="$K3S_TOKEN" \
+          sh -s - --node-label role=kafka
         echo "$(date): K3s agent installation completed"
       else
         echo "$(date): ERROR: Failed to retrieve K3s token"

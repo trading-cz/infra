@@ -33,13 +33,13 @@ k3s-control (cx23): Primary IP #1 + 10.0.1.10
 
 kafka-0 (cx23): Primary IP #2 + 10.0.1.20
 ├─ Kafka broker
-└─ External Kafka access via NodePort 33333
+└─ External Kafka access via NodePort 30002
 
 ```
 
 **Kafka Listeners**:
 - Internal (9092): `trading-cluster-kafka-bootstrap.kafka:9092` (pod access)
-- External (33333): `<kafka-0-ip>:33333` (internet access via NodePort)
+- External (30002): `<kafka-0-ip>:30002` (internet access via NodePort)
 
 **Why 1 Kafka brokers?** only for testing
 
@@ -62,6 +62,8 @@ root/
 
 .github/workflows/
 ├── hcloud-maintenance.yml    # list|destroy-cluster|destroy-all
+├── deploy-cluster.yml        # Main orchestration
+├── 05-reusable-verify-access.yml # Verification & Debugging
 └── megalinter-terraform.yml  # linter for PR review
 ```
 
@@ -80,7 +82,8 @@ root/
 3. Assigns Primary IP #2 to kafka-0 (hcloud CLI)
 4. Cloud-init installs K3s on all nodes
 5. Deploys Strimzi + Kafka cluster
-6. Outputs kubeconfig artifact
+6. Verifies Access (ArgoCD + Kafka)
+7. Outputs kubeconfig artifact
 
 ### Destroy Cluster (Daily)
 **Trigger**: Actions → hcloud-maintenance  
@@ -109,7 +112,7 @@ version: 4.0.0
 replicas: 3  # KRaft quorum minimum
 listeners:
   - name: plain, port: 9092, type: internal
-  - name: external, port: 9094, type: nodeport, nodePort: 33333
+  - name: external, port: 9094, type: nodeport, nodePort: 30002
 ```
 
 **Primary IP Not Assigned**: Check GitHub Actions logs → "Assign Primary IP to kafka-0"
@@ -134,7 +137,11 @@ Example: Remove-Item -Recurse -Force .terraform, .terraform.lock.hcl -ErrorActio
 
 **Kafka**:
 - Internal: trading-cluster-kafka-bootstrap.kafka:9092
-- External: <kafka-0-ip>:33333
+- External: <kafka-0-ip>:30002
+
+**ArgoCD**:
+- External: https://<control-plane-ip>:30443
+- Header Required: `Host: argocd.local` (due to Ingress validation)
 
 ---
 
