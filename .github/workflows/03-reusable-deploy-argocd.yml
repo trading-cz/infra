@@ -215,60 +215,138 @@ jobs:
           
           echo "✅ ArgoCD CR deployed successfully"
           echo ""
+          echo "=========================================="
+
+      - name: 'Verification Step 1: ArgoCD CR Creation'
+        run: |
+          echo "=========================================="
+          echo "Verification Step 1: ArgoCD CR Creation"
+          echo "=========================================="
           
-          # Check ArgoCD CR status immediately
-          echo "Checking ArgoCD CR status..."
-          kubectl get argocd trading-argocd -n argocd -o yaml || true
-          echo ""
-          
-          echo "Checking operator logs after CR creation..."
-          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=100 || true
-          echo ""
-          
-          echo "Waiting for ArgoCD components to be ready..."
-          
-          # Wait for ArgoCD server deployment (with retry)
-          echo "Waiting for ArgoCD server..."
-          for i in {1..24}; do
-            if kubectl get deployment trading-argocd-server -n argocd >/dev/null 2>&1; then
-              echo "✅ ArgoCD server deployment found"
+          echo "Waiting for ArgoCD CR to be created..."
+          ATTEMPT=0
+          while [ $ATTEMPT -lt 30 ]; do
+            if kubectl get argocd trading-argocd -n argocd &>/dev/null 2>&1; then
+              echo "✅ ArgoCD CR 'trading-argocd' found"
               break
             fi
-            echo "⏳ Attempt $i/24: Waiting for ArgoCD server deployment to be created..."
+            echo "  Attempt $((ATTEMPT+1))/30: Waiting..."
+            sleep 2
+            ((ATTEMPT++))
+          done
+          
+          if [ $ATTEMPT -eq 30 ]; then
+            echo "❌ ArgoCD CR not created after 1 minute"
+            echo "Debug info:"
+            kubectl get argocd -n argocd -o yaml
+            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 || true
+            exit 1
+          fi
+          
+          echo ""
+          echo "Checking ArgoCD CR phase..."
+          PHASE=$(kubectl get argocd trading-argocd -n argocd -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+          echo "  Phase: $PHASE"
+          
+          echo ""
+          echo "ArgoCD CR details:"
+          kubectl get argocd trading-argocd -n argocd -o wide
+          echo ""
+          echo "✅ ArgoCD CR verified"
+          echo "=========================================="
+
+      - name: 'Verification Step 2: ArgoCD Components Created'
+        run: |
+          echo "=========================================="
+          echo "Verification Step 2: ArgoCD Components Created"
+          echo "=========================================="
+          
+          EXPECTED_COMPONENTS=("trading-argocd-server" "trading-argocd-repo-server" "trading-argocd-redis" "trading-argocd-application-controller")
+          
+          echo "Waiting for all ArgoCD components to be created..."
+          ATTEMPT=0
+          FOUND_COMPONENTS=0
+          
+          while [ $ATTEMPT -lt 60 ]; do
+            FOUND_COMPONENTS=0
+            for COMP in "${EXPECTED_COMPONENTS[@]}"; do
+              if kubectl get deployment "$COMP" -n argocd &>/dev/null 2>&1 || \
+                 kubectl get statefulset "$COMP" -n argocd &>/dev/null 2>&1; then
+                ((FOUND_COMPONENTS++))
+              fi
+            done
             
-            # Show what resources exist
-            if [ $((i % 6)) -eq 0 ]; then
-              echo "Current resources in argocd namespace:"
-              kubectl get all -n argocd || true
-              echo ""
-              echo "Recent operator logs:"
-              kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=20 --since=30s || true
-              echo ""
+            if [ $FOUND_COMPONENTS -eq ${#EXPECTED_COMPONENTS[@]} ]; then
+              echo "✅ All $FOUND_COMPONENTS components found"
+              break
             fi
             
-            sleep 5
+            echo "  Attempt $((ATTEMPT+1))/60: Found $FOUND_COMPONENTS/${#EXPECTED_COMPONENTS[@]} components..."
+            sleep 2
+            ((ATTEMPT++))
+          done
+          
+          if [ $FOUND_COMPONENTS -ne ${#EXPECTED_COMPONENTS[@]} ]; then
+            echo "❌ Not all components created (found $FOUND_COMPONENTS/${#EXPECTED_COMPONENTS[@]})"
+            echo ""
+            echo "Available resources in argocd namespace:"
+            kubectl get all -n argocd
+            echo ""
+            echo "Operator logs:"
+            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 || true
+            exit 1
+          fi
+          
+          echo ""
+          echo "Component status:"
+          kubectl get all -n argocd
+          echo "=========================================="
+
+      - name: 'Verification Step 3: ArgoCD Components Ready'
+        run: |
+          echo "=========================================="
+          echo "Verification Step 3: ArgoCD Components Ready"
+          echo "=========================================="
+          
+          EXPECTED_COMPONENTS=("trading-argocd-server" "trading-argocd-repo-server" "trading-argocd-redis")
+          
+          echo "Waiting for ArgoCD components to be READY..."
+          for COMP in "${EXPECTED_COMPONENTS[@]}"; do
+            echo ""
+            echo "Checking $COMP..."
             
-            if [ $i -eq 24 ]; then
-              echo "❌ ArgoCD server deployment not created after 2 minutes"
+            if ! kubectl wait --for=condition=available --timeout=300s deployment/"$COMP" -n argocd 2>/dev/null; then
+              echo "⚠️  deployment/$COMP timed out waiting to be ready"
+              echo "   Current status:"
+              kubectl get deployment "$COMP" -n argocd -o wide || true
               echo ""
-              echo "Final debugging info:"
-              echo "ArgoCD CR:"
-              kubectl get argocd -n argocd -o yaml
+              echo "   Pod status:"
+              kubectl get pods -n argocd -l "app.kubernetes.io/name=$COMP" -o wide || true
               echo ""
-              echo "Operator logs (last 100 lines):"
-              kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=100
+              echo "   Pod logs (last 30 lines):"
+              kubectl logs -n argocd -l "app.kubernetes.io/name=$COMP" --tail=30 --all-containers=true || true
               echo ""
-              echo "All resources in argocd namespace:"
-              kubectl get all -n argocd
-              exit 1
+              echo "   Continuing to next component..."
+            else
+              echo "✅ deployment/$COMP is ready"
             fi
           done
-          kubectl wait --for=condition=available --timeout=5m \
-            deployment/trading-argocd-server -n argocd || true
-          kubectl wait --for=condition=available --timeout=5m \
-            deployment/trading-argocd-repo-server -n argocd || true
-          kubectl wait --for=condition=available --timeout=5m \
-            deployment/trading-argocd-redis -n argocd || true
+          
+          # Special handling for application-controller (StatefulSet)
+          echo ""
+          echo "Checking trading-argocd-application-controller (StatefulSet)..."
+          if kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=trading-argocd-application-controller \
+            -n argocd --timeout=300s 2>/dev/null; then
+            echo "✅ trading-argocd-application-controller pod is ready"
+          else
+            echo "⚠️  trading-argocd-application-controller pod timed out"
+            kubectl get pods -n argocd -l app.kubernetes.io/name=trading-argocd-application-controller -o wide || true
+          fi
+          
+          echo ""
+          echo "Final component status:"
+          kubectl get all -n argocd
+          echo "=========================================="
 
       - name: Configure ArgoCD Admin Password
         env:
@@ -346,50 +424,158 @@ jobs:
           
           echo "========================================"
 
+      - name: 'Verification Step 4: ArgoCD Services'
+        run: |
+          echo "=========================================="
+          echo "Verification Step 4: ArgoCD Services"
+          echo "=========================================="
+          
+          echo "Checking services are created and have ClusterIPs..."
+          
+          SERVICES=("trading-argocd-server" "trading-argocd-repo-server" "trading-argocd-redis")
+          
+          for SVC in "${SERVICES[@]}"; do
+            if kubectl get svc "$SVC" -n argocd &>/dev/null; then
+              CLUSTER_IP=$(kubectl get svc "$SVC" -n argocd -o jsonpath='{.spec.clusterIP}')
+              if [ -n "$CLUSTER_IP" ] && [ "$CLUSTER_IP" != "None" ]; then
+                echo "✅ Service $SVC has ClusterIP: $CLUSTER_IP"
+              else
+                echo "⚠️  Service $SVC has no ClusterIP"
+              fi
+            else
+              echo "⚠️  Service $SVC not found"
+            fi
+          done
+          
+          echo ""
+          echo "Full service details:"
+          kubectl get svc -n argocd -o wide
+          echo ""
+          echo "=========================================="
+
       - name: Verify ArgoCD Applications Sync
         run: |
-          echo "========================================"
-          echo "Verifying ArgoCD Applications"
-          echo "========================================"
+          echo "=========================================="
+          echo "Verification Step 5: Parent App-of-Apps Deployment"
+          echo "=========================================="
           
-          # Wait for child applications to be created
-          echo "Waiting for child applications to be created by parent app..."
-          MAX_ATTEMPTS=12
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            APP_COUNT=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
-            if [ "$APP_COUNT" -ge 2 ]; then
-              echo "✅ Found $APP_COUNT applications (parent + children)"
+          echo "Checking if parent app 'trading-system' exists..."
+          ATTEMPT=0
+          while [ $ATTEMPT -lt 30 ]; do
+            if kubectl get application trading-system -n argocd &>/dev/null; then
+              echo "✅ Parent app 'trading-system' found"
+              break
+            fi
+            echo "  Attempt $((ATTEMPT+1))/30: Waiting for parent app..."
+            sleep 2
+            ((ATTEMPT++))
+          done
+          
+          if [ $ATTEMPT -eq 30 ]; then
+            echo "⚠️  Parent app not found after 1 minute"
+            echo "   This is expected if not deployed yet"
+            echo ""
+            echo "Available applications:"
+            kubectl get applications -n argocd || echo "No applications"
+            exit 0
+          fi
+          
+          echo ""
+          echo "Monitoring parent app sync status (waiting up to 5 minutes)..."
+          ATTEMPT=0
+          while [ $ATTEMPT -lt 150 ]; do
+            SYNC=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            HEALTH=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+            
+            echo "  Attempt $((ATTEMPT+1))/150: Sync=$SYNC, Health=$HEALTH"
+            
+            if [ "$SYNC" != "Unknown" ]; then
+              echo "✅ Parent app has reached sync status: $SYNC (Health: $HEALTH)"
               break
             fi
             
-            echo "⏳ Attempt $i/$MAX_ATTEMPTS: Found $APP_COUNT applications, waiting for more..."
-            sleep 5
+            sleep 2
+            ((ATTEMPT++))
+          done
+          
+          if [ "$SYNC" = "Unknown" ]; then
+            echo "⚠️  Parent app sync status is still Unknown"
+            echo ""
+            echo "Checking error conditions..."
+            ERROR_MSG=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.conditions[?(@.type=="ComparisonError")].message}' 2>/dev/null || echo "")
+            if [ -n "$ERROR_MSG" ]; then
+              echo "Comparison Error detected:"
+              echo "  $ERROR_MSG"
+              echo ""
+              echo "This is often due to:"
+              echo "  - ArgoCD repo-server connecting to Git repository"
+              echo "  - Network connectivity issues"
+              echo "  - Repository access problems"
+            fi
+          fi
+          
+          echo ""
+          echo "Parent app full status:"
+          kubectl get application trading-system -n argocd -o yaml | head -80
+          echo "=========================================="
+
+      - name: 'Verification Step 6: Child Applications'
+        run: |
+          echo "=========================================="
+          echo "Verification Step 6: Child Applications"
+          echo "=========================================="
+          
+          echo "Waiting for child applications to be created by parent app..."
+          ATTEMPT=0
+          while [ $ATTEMPT -lt 120 ]; do
+            APP_COUNT=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
             
-            if [ $i -eq $MAX_ATTEMPTS ]; then
-              echo "⚠️  Only found $APP_COUNT application(s) after waiting"
-              echo "This may be normal if no child apps are configured yet"
+            if [ "$APP_COUNT" -ge 2 ]; then
+              echo "✅ Found $APP_COUNT applications"
+              break
+            fi
+            
+            echo "  Attempt $((ATTEMPT+1))/120: Found $APP_COUNT application(s)..."
+            sleep 2
+            ((ATTEMPT++))
+          done
+          
+          APP_COUNT=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
+          
+          if [ "$APP_COUNT" -lt 2 ]; then
+            echo "⚠️  Only $APP_COUNT application(s) found (expected parent + children)"
+            echo "   This may be normal if child apps are not configured"
+          fi
+          
+          echo ""
+          echo "All applications:"
+          kubectl get applications -n argocd -o wide
+          
+          echo ""
+          echo "Application statuses:"
+          for app in $(kubectl get applications -n argocd -o name 2>/dev/null); do
+            APP_NAME=$(echo "$app" | cut -d'/' -f2)
+            SYNC=$(kubectl get "$app" -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            HEALTH=$(kubectl get "$app" -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+            REV=$(kubectl get "$app" -n argocd -o jsonpath='{.status.syncedRevision}' 2>/dev/null || echo "N/A")
+            
+            echo ""
+            echo "  $APP_NAME:"
+            echo "    Sync: $SYNC"
+            echo "    Health: $HEALTH"
+            echo "    Synced Revision: $REV"
+            
+            # Check for errors
+            if [ "$SYNC" = "Unknown" ]; then
+              CONDITIONS=$(kubectl get "$app" -n argocd -o jsonpath='{.status.conditions[?(@.type=="ComparisonError")].message}' 2>/dev/null || echo "")
+              if [ -n "$CONDITIONS" ]; then
+                echo "    ⚠️  Error: ${CONDITIONS:0:100}..."
+              fi
             fi
           done
           
           echo ""
-          echo "Current applications:"
-          kubectl get applications -n argocd -o wide
-          echo ""
-          
-          # Check sync status of each application
-          echo "Application sync status:"
-          for app in $(kubectl get applications -n argocd -o name); do
-            APP_NAME=$(echo $app | cut -d'/' -f2)
-            SYNC_STATUS=$(kubectl get $app -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-            HEALTH_STATUS=$(kubectl get $app -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-            
-            echo "  $APP_NAME:"
-            echo "    Sync: $SYNC_STATUS"
-            echo "    Health: $HEALTH_STATUS"
-          done
-          
-          echo ""
-          echo "========================================"
+          echo "=========================================="
 
       - name: Get Initial Admin Password
         run: |
