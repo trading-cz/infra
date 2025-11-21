@@ -1,6 +1,17 @@
 name: Debug Cluster
 
 on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment to debug'
+        required: true
+        type: string
+    secrets:
+      HCLOUD_TOKEN:
+        required: true
+      SSH_PRIVATE_KEY:
+        required: true
   workflow_dispatch:
     inputs:
       environment:
