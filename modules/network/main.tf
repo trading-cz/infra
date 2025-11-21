@@ -47,7 +47,7 @@ resource "hcloud_firewall" "main" {
   rule {
     direction  = "in"
     protocol   = "tcp"
-    port       = "443"
+    port       = "30443"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
@@ -55,7 +55,7 @@ resource "hcloud_firewall" "main" {
   rule {
     direction  = "in"
     protocol   = "tcp"
-    port       = "80"
+    port       = "30080"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 

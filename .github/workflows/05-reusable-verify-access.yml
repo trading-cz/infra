@@ -59,9 +59,9 @@ jobs:
         id: argocd
         continue-on-error: true
         run: |
-          echo "🌐 Checking ArgoCD UI at https://${{ inputs.control_plane_ip }}..."
+          echo "🌐 Checking ArgoCD UI at https://${{ inputs.control_plane_ip }}:30443..."
           # -k allows insecure (self-signed cert), -f fails on 404/500 errors
-          if curl -k -f --connect-timeout 10 "https://${{ inputs.control_plane_ip }}"; then
+          if curl -k -f --connect-timeout 10 "https://${{ inputs.control_plane_ip }}:30443"; then
             echo "✅ ArgoCD UI is accessible!"
           else
             echo "❌ Failed to access ArgoCD UI"

@@ -13,7 +13,9 @@ write_files:
       echo "$(date): Installing K3s server..."
       curl -sfL https://get.k3s.io | sh -s - \
         --write-kubeconfig-mode 644 \
-        --disable servicelb
+        --disable servicelb \
+        --disable traefik \
+        --tls-san $(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
       
       # Export kubeconfig for kubectl and helm
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -42,12 +44,16 @@ write_files:
       curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       
       # ============================================
-      # Install Strimzi Kafka Operator
+      # Install Traefik (Helm)
       # ============================================
-      echo "$(date): Installing Strimzi Kafka Operator..."
-      
-      helm repo add strimzi https://strimzi.io/charts/
+      echo "$(date): Installing Traefik..."
+      helm repo add traefik https://traefik.github.io/charts
       helm repo update
+      helm install traefik traefik/traefik \
+        --namespace kube-system \
+        --set ports.web.nodePort=30080 \
+        --set ports.websecure.nodePort=30443 \
+        --set service.type=NodePort
       
       helm install strimzi-kafka-operator strimzi/strimzi-kafka-operator \
         --namespace kafka \
