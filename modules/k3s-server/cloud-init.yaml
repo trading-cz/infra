@@ -55,22 +55,6 @@ write_files:
         --set ports.websecure.nodePort=30443 \
         --set service.type=NodePort
       
-      helm install strimzi-kafka-operator strimzi/strimzi-kafka-operator \
-        --namespace kafka \
-        --create-namespace \
-        --version 0.48.0 \
-        --set watchAnyNamespace=true \
-        --set resources.requests.memory=128Mi \
-        --set resources.requests.cpu=100m \
-        --set resources.limits.memory=512Mi \
-        --set resources.limits.cpu=500m \
-        --set logLevel=INFO \
-        --wait
-      
-      echo "$(date): Verifying Strimzi installation..."
-      kubectl get pods -n kafka
-      kubectl get crd | grep kafka || echo "Strimzi CRDs installed"
-      
       echo "$(date): K3s control plane setup complete"
       touch /root/k3s-ready.txt
       
