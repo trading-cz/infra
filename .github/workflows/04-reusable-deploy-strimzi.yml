@@ -13,8 +13,8 @@ on:
         required: true
 
 jobs:
-  deploy:
-    name: Deploy and Verify Strimzi
+  deploy-strimzi:
+    name: Install Strimzi Operator
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH Key
@@ -29,343 +29,53 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
-      - name: Download Kubeconfig from Control Plane
+      - name: Download Kubeconfig
         run: |
           CONTROL_IP="${{ inputs.control_plane_ip }}"
           mkdir -p ~/.kube
           
           echo "📥 Downloading kubeconfig from $CONTROL_IP..."
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
-            sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
-            chmod 600 ~/.kube/config
-            echo "✅ Kubeconfig downloaded and configured"
-          else
-            echo "❌ Failed to download kubeconfig"
-            exit 1
-          fi
-
-      - name: Verify Strimzi Kafka Operator
-        run: |
-          echo "========================================"
-          echo "Verifying Strimzi Kafka Operator"
-          echo "========================================"
-          
-          if kubectl get namespace kafka 2>/dev/null; then
-            echo "✅ Kafka namespace exists"
-          else
-            echo "❌ Kafka namespace not found. It should be created by ArgoCD."
-            echo ""
-            echo "Available namespaces:"
-            kubectl get namespaces
-            exit 1
-          fi
-          
-          echo ""
-          echo "Checking for Strimzi operator deployment..."
-          if kubectl get deployment strimzi-cluster-operator -n kafka 2>/dev/null; then
-            echo "✅ Strimzi operator deployment exists"
-          else
-            echo "❌ Strimzi operator deployment not found"
-            echo ""
-            echo "Resources in kafka namespace:"
-            kubectl get all -n kafka
-            echo ""
-            echo "Note: Strimzi operator should be deployed via ArgoCD"
-            exit 1
-          fi
-          
-          echo ""
-          echo "Waiting for Strimzi operator to be ready..."
-          if ! kubectl wait --for=condition=available deployment/strimzi-cluster-operator -n kafka --timeout=300s; then
-            echo "❌ Strimzi operator not ready after 5 minutes"
-            echo ""
-            echo "Deployment status:"
-            kubectl get deployment strimzi-cluster-operator -n kafka
-            echo ""
-            echo "Pod status:"
-            kubectl get pods -n kafka -l name=strimzi-cluster-operator
-            echo ""
-            echo "Operator logs:"
-            kubectl logs -n kafka deployment/strimzi-cluster-operator --tail=50
-            exit 1
-          fi
-          
-          echo "✅ Strimzi operator is running"
-          echo ""
-          echo "Operator pod:"
-          kubectl get pods -n kafka -l name=strimzi-cluster-operator
-          echo "========================================"
-
-      - name: Verify Strimzi Kafka CRDs
-        run: |
-          echo "========================================"
-          echo "Verifying Strimzi CRDs Installation"
-          echo "========================================"
-          
-          REQUIRED_CRDS=(
-            "kafkas.kafka.strimzi.io"
-            "kafkatopics.kafka.strimzi.io"
-            "kafkausers.kafka.strimzi.io"
-          )
-          ALL_CRDS_PRESENT=true
-          for CRD in "${REQUIRED_CRDS[@]}"; do
-            if kubectl get crd "$CRD" 2>/dev/null; then
-              echo "✅ CRD exists: $CRD"
-            else
-              echo "❌ CRD missing: $CRD"
-              ALL_CRDS_PRESENT=false
-            fi
-          done
-          
-          if [ "$ALL_CRDS_PRESENT" = "false" ]; then
-            echo "❌ Some Strimzi CRDs are missing"
-            exit 1
-          fi
-          
-          echo "✅ All required Strimzi CRDs are installed"
-          echo "========================================"
-
-      - name: Verify Kafka Cluster Deployment via ArgoCD
-        run: |
-          echo "========================================"
-          echo "Verifying Kafka Cluster Deployment"
-          echo "========================================"
-          
-          # Check parent app first
-          echo "1. Checking Parent App (trading-system)..."
-          if kubectl get application trading-system -n argocd 2>/dev/null >/dev/null; then
-            PARENT_SYNC=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-            PARENT_HEALTH=$(kubectl get application trading-system -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-            
-            echo "   Parent App Status:"
-            echo "   - Sync: $PARENT_SYNC"
-            echo "   - Health: $PARENT_HEALTH"
-            
-            if [ "$PARENT_SYNC" != "Synced" ]; then
-              echo "   ⚠️  Parent app not synced yet, child apps may not be created"
-              echo ""
-              echo "   Parent App Details:"
-              kubectl get application trading-system -n argocd -o jsonpath='{.status.conditions}' 2>/dev/null | jq '.' 2>/dev/null || echo "   No conditions"
-            fi
-          else
-            echo "   ❌ Parent app 'trading-system' not found!"
-          fi
-          echo ""
-          
-          # Check if kafka-cluster ArgoCD app exists and is syncing
-          echo "2. Checking kafka-cluster ArgoCD application..."
-          if kubectl get application kafka-cluster -n argocd 2>/dev/null; then
-            echo "   ✅ kafka-cluster ArgoCD application exists"
-            
-            SYNC_STATUS=$(kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-            HEALTH_STATUS=$(kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-            
-            echo "   - Sync Status: $SYNC_STATUS"
-            echo "   - Health Status: $HEALTH_STATUS"
-            
-            if [ "$SYNC_STATUS" != "Synced" ]; then
-              echo "   ⚠️  Application not yet synced"
-              echo ""
-              echo "   Sync Conditions:"
-              kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.conditions}' 2>/dev/null | jq '.' 2>/dev/null || echo "   No conditions"
-            fi
-          else
-            echo "   ⚠️  kafka-cluster ArgoCD application not found yet"
-            echo "      This should be created by the parent app-of-apps"
-            echo ""
-            echo "   All Available Applications:"
-            kubectl get applications -n argocd -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,MESSAGE:.status.conditions[0].message
-          fi
-          
-          echo ""
-          echo "3. Checking for Kafka cluster CR..."
-          # Wait for Kafka CR to be created
-          MAX_ATTEMPTS=24
-          for i in $(seq 1 $MAX_ATTEMPTS); do
-            if kubectl get kafka trading-cluster -n kafka 2>/dev/null; then
-              echo "✅ Kafka cluster CR 'trading-cluster' found"
+          for i in {1..5}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
+              sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
+              chmod 600 ~/.kube/config
+              echo "✅ Kubeconfig downloaded"
               break
             fi
-            
-            echo "⏳ Attempt $i/$MAX_ATTEMPTS: Waiting for Kafka cluster to be created..."
-            
-            # Show diagnostic info every 6 attempts (30 seconds)
-            if [ $((i % 6)) -eq 0 ]; then
-              echo ""
-              echo "🔍 Diagnostic Info (Attempt $i/$MAX_ATTEMPTS):"
-              echo "-------------------------------------------"
-              
-              # Check parent app status
-              echo "1. Parent App (trading-system) Status:"
-              kubectl get application trading-system -n argocd -o jsonpath='{.status}' 2>/dev/null | jq -r '
-                "   Sync: \(.sync.status // "Unknown")",
-                "   Health: \(.health.status // "Unknown")",
-                "   Message: \(.conditions[0].message // "No message")"
-              ' 2>/dev/null || echo "   Unable to get status"
-              echo ""
-              
-              # Check kafka-cluster app status if it exists
-              echo "2. Kafka-Cluster App Status:"
-              if kubectl get application kafka-cluster -n argocd 2>/dev/null >/dev/null; then
-                kubectl get application kafka-cluster -n argocd -o jsonpath='{.status}' 2>/dev/null | jq -r '
-                  "   Sync: \(.sync.status // "Unknown")",
-                  "   Health: \(.health.status // "Unknown")",
-                  "   Last Sync: \(.operationState.finishedAt // "Not synced yet")",
-                  "   Message: \(.conditions[0].message // "No message")"
-                ' 2>/dev/null || echo "   Unable to get status"
-                
-                # Show sync operation details if available
-                echo ""
-                echo "   Recent Sync Operation:"
-                kubectl get application kafka-cluster -n argocd -o jsonpath='{.status.operationState.operation.sync}' 2>/dev/null | jq '.' 2>/dev/null || echo "   No sync operation yet"
-              else
-                echo "   ⚠️  kafka-cluster Application not created yet"
-                echo "   Parent app should create child applications"
-              fi
-              echo ""
-              
-              # Check ArgoCD application controller logs for errors
-              echo "3. ArgoCD Application Controller Logs (last 20 lines):"
-              kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-application-controller --tail=20 2>/dev/null | grep -i "kafka\|error\|failed" || echo "   No relevant logs found"
-              echo ""
-              
-              # Check Strimzi operator logs
-              echo "4. Strimzi Operator Logs (last 15 lines):"
-              kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=15 2>/dev/null || echo "   Unable to get operator logs"
-              echo ""
-              
-              # Check kafka namespace resources
-              echo "5. Kafka Namespace Resources:"
-              kubectl get all -n kafka 2>/dev/null || echo "   Unable to list resources"
-              echo ""
-              
-              # Check if kafka-cluster manifests exist in ArgoCD repo
-              echo "6. ArgoCD Source Status:"
-              kubectl get application kafka-cluster -n argocd -o jsonpath='{.spec.source}' 2>/dev/null | jq '.' 2>/dev/null || echo "   kafka-cluster app not found"
-              echo "-------------------------------------------"
-              echo ""
-            fi
-            
+            echo "⚠️ Retry $i/5..."
             sleep 5
-            
-            if [ $i -eq $MAX_ATTEMPTS ]; then
-              echo ""
-              echo "❌ Kafka cluster CR not created after 2 minutes"
-              echo ""
-              echo "📋 Final Diagnostic Report:"
-              echo "==========================================="
-              
-              # Final status check
-              echo ""
-              echo "1. All ArgoCD Applications:"
-              kubectl get applications -n argocd -o wide
-              echo ""
-              
-              echo "2. Parent App Details:"
-              kubectl describe application trading-system -n argocd 2>/dev/null | tail -30
-              echo ""
-              
-              if kubectl get application kafka-cluster -n argocd 2>/dev/null >/dev/null; then
-                echo "3. Kafka-Cluster App Details:"
-                kubectl describe application kafka-cluster -n argocd 2>/dev/null | tail -30
-                echo ""
-              fi
-              
-              echo "4. Kafka Namespace Events:"
-              kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -20
-              echo ""
-              
-              echo "5. ArgoCD Namespace Events:"
-              kubectl get events -n argocd --sort-by='.lastTimestamp' | grep -i kafka | tail -20 || echo "No kafka-related events"
-              echo ""
-              
-              echo "==========================================="
-              echo ""
-              echo "⚠️  Possible causes:"
-              echo "  1. Parent app-of-apps not syncing child apps"
-              echo "  2. kafka-cluster Application manifest has errors"
-              echo "  3. Git repository path incorrect in parent app"
-              echo "  4. ArgoCD application controller issues"
-              echo ""
-              echo "💡 Next steps:"
-              echo "  - Check ArgoCD UI: kubectl port-forward svc/trading-argocd-server -n argocd 8080:80"
-              echo "  - Manually sync: kubectl patch application kafka-cluster -n argocd --type merge -p '{\"metadata\":{\"annotations\":{\"argocd.argoproj.io/refresh\":\"hard\"}}}'"
-              echo "  - Check logs: kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-application-controller"
-              echo ""
-              echo "⚠️  Continuing without Kafka cluster verification"
-              echo "    Check ArgoCD UI for kafka-cluster app status"
-              echo "========================================"
-              exit 0  # Don't fail, as this might still be syncing
-            fi
           done
-          
-          echo ""
-          echo "Kafka cluster status:"
-          kubectl get kafka trading-cluster -n kafka -o yaml | grep -A 10 "status:" || true
-          echo ""
-          
-          echo "Waiting for Kafka pods to start..."
-          sleep 10
-          
-          echo "Kafka pods:"
-          kubectl get pods -n kafka -l app.kubernetes.io/name=kafka
-          echo "========================================"
 
-      - name: Verify Kafka External Accessibility
+      - name: Install Strimzi Operator
         run: |
-          echo "========================================"
-          echo "Verifying Kafka External Access"
-          echo "========================================"
+          echo "🚀 Creating Kafka Namespace..."
+          kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "📦 Installing Strimzi Operator (Latest)..."
+          # Using the official install file which includes CRDs and Deployment
+          kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
+
+      - name: Verify Strimzi Installation
+        run: |
+          echo "⏳ Waiting for Strimzi Cluster Operator..."
+          kubectl wait --for=condition=available deployment/strimzi-cluster-operator -n kafka --timeout=300s
           
-          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          echo "✅ Strimzi Operator is UP!"
+          kubectl get pods -n kafka
           
-          # Check if Kafka service with NodePort exists
-          echo "Checking for Kafka external listener service..."
-          KAFKA_EXTERNAL_SVC=$(kubectl get svc -n kafka -o name | grep "trading-cluster-kafka-external-bootstrap" || echo "")
-          
-          if [ -z "$KAFKA_EXTERNAL_SVC" ]; then
-            echo "⚠️  Kafka external service not found yet"
-            echo "     This will be created once Kafka cluster is ready"
-            echo ""
-            echo "Current services in kafka namespace:"
-            kubectl get svc -n kafka
-            echo ""
-            echo "Note: External access via NodePort will be available after Kafka pods are running"
-          else
-            KAFKA_SVC_NAME=$(echo $KAFKA_EXTERNAL_SVC | cut -d'/' -f2)
-            NODEPORT=$(kubectl get svc $KAFKA_SVC_NAME -n kafka -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
-            
-            if [ -n "$NODEPORT" ]; then
-              echo "✅ Kafka external service found: $KAFKA_SVC_NAME"
-              echo "   NodePort: $NODEPORT"
-              echo "   External address: $CONTROL_IP:$NODEPORT"
-              echo ""
-              
-              # Test port connectivity (basic TCP check)
-              echo "Testing Kafka port accessibility..."
-              if timeout 5 bash -c "</dev/tcp/$CONTROL_IP/$NODEPORT" 2>/dev/null; then
-                echo "✅ Kafka port $NODEPORT is accessible from outside"
-              else
-                echo "⚠️  Cannot connect to Kafka port yet (pods may still be starting)"
-              fi
-            else
-              echo "⚠️  NodePort not assigned yet"
-            fi
-          fi
-          
-          echo ""
-          echo "========================================"
-          echo "  Kafka Deployment Summary"
-          echo "========================================"
-          echo "Namespace: kafka"
-          echo "Cluster Name: trading-cluster"
-          echo "Internal Bootstrap: trading-cluster-kafka-bootstrap.kafka:9092"
-          if [ -n "$NODEPORT" ]; then
-            echo "External Bootstrap: $CONTROL_IP:$NODEPORT"
-          else
-            echo "External Bootstrap: Pending (NodePort not ready)"
-          fi
-          echo ""
-          echo "All resources in kafka namespace:"
-          kubectl get all -n kafka
-          echo "========================================"
+          echo "📜 Verifying CRDs..."
+          kubectl get crd | grep kafka
+
+      - name: Debug on Failure
+        if: failure()
+        run: |
+          echo "❌ Strimzi Deployment Failed. Dumping State..."
+          echo "::group::Kafka Namespace Pods"
+          kubectl get pods -n kafka -o wide
+          echo "::endgroup::"
+          echo "::group::Kafka Namespace Events"
+          kubectl get events -n kafka --sort-by='.lastTimestamp'
+          echo "::endgroup::"
+          echo "::group::Strimzi Operator Logs"
+          kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=50 || true
+          echo "::endgroup::"

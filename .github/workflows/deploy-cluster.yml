@@ -32,11 +32,8 @@ jobs:
     uses: trading-cz/infra/.github/workflows/03-reusable-deploy-argocd.yml@main
     with:
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
-      environment: ${{ inputs.environment }}
     secrets:
       ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
-      argocd_admin_password: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}
-      token_git_repo_config: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
 
   deploy_strimzi:
     needs: [provision, deploy_argocd]

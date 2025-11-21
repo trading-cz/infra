@@ -82,21 +82,21 @@ jobs:
           echo "Traefik service:"
           kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik || true
 
-      - name: Verify Strimzi Operator
+      - name: Debug on Failure
+        if: failure()
         run: |
-          echo "Checking Strimzi Kafka Operator..."
-          kubectl wait --for=condition=ready pod -l name=strimzi-cluster-operator -n kafka --timeout=300s || true
-          STRIMZI_COUNT=$(kubectl get pods -n kafka -l name=strimzi-cluster-operator --no-headers | grep Running | wc -l)
-          if [ "$STRIMZI_COUNT" -ge 1 ]; then
-            echo "✅ Strimzi operator running ($STRIMZI_COUNT pods)"
-          else
-            echo "⚠️  Strimzi operator not running"
-          fi
-          
-          echo ""
-          echo "Strimzi CRDs:"
-          kubectl get crd | grep kafka.strimzi.io || echo "⚠️  No Strimzi CRDs found"
-          
+          echo "❌ Verification Failed. Dumping Cluster State..."
+          echo "::group::Nodes"
+          kubectl get nodes -o wide
+          kubectl describe nodes
+          echo "::endgroup::"
+          echo "::group::All Pods"
+          kubectl get pods -A -o wide
+          echo "::endgroup::"
+          echo "::group::Events"
+          kubectl get events -A --sort-by='.lastTimestamp'
+          echo "::endgroup::"
+
       - name: Verify Network Ports
         run: |
           if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${{ inputs.control_plane_ip }}/6443" 2>/dev/null; then
