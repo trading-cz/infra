@@ -59,11 +59,20 @@ resource "hcloud_firewall" "main" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
-  # Kafka NodePort (external bootstrap access)
+  # Kafka NodePorts (Bootstrap & Broker)
   rule {
     direction  = "in"
     protocol   = "tcp"
-    port       = "33333"
+    port       = "30001-30002"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # Flannel VXLAN (Inter-node communication)
+  # Required because K3s uses the public interface by default on Hetzner
+  rule {
+    direction  = "in"
+    protocol   = "udp"
+    port       = "8472"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 }
