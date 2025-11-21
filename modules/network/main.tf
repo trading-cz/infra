@@ -60,10 +60,14 @@ resource "hcloud_firewall" "main" {
   }
 
   # Kafka NodePorts (Bootstrap & Broker)
+  # Range 30000-30010 allows for:
+  # - 30001: Bootstrap
+  # - 30002: Broker 0
+  # - 30003+: Future Brokers
   rule {
     direction  = "in"
     protocol   = "tcp"
-    port       = "30001-30002"
+    port       = "30000-30010"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
