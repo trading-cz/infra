@@ -78,13 +78,12 @@ jobs:
 
   cleanup_on_failure:
     name: Auto-Cleanup on Failure
-    needs: [provision, verify_cluster, deploy_argocd, deploy_strimzi, verify_access]
+    needs: [diagnostics_on_failure]
     if: failure()
     uses: trading-cz/infra/.github/workflows/hcloud-maintenance.yml@main
     with:
       env: ${{ inputs.environment }}
-      action: 'list'
-#      action: 'destroy-cluster'
+      action: 'destroy-cluster'
     secrets:
       HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
 
