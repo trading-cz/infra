@@ -116,6 +116,34 @@ jobs:
         run: |
           echo "❌ Verification Failed. Dumping Cluster State..."
           
+          echo "::group::CRD Status"
+          kubectl get crd | grep -E 'argocd|kafka|strimzi'
+          echo "::endgroup::"
+
+          echo "::group::ArgoCD CR Status"
+          kubectl get argocd -n argocd -o yaml || echo "ArgoCD CR not found"
+          echo "::endgroup::"
+
+          echo "::group::Kafka CR Status"
+          kubectl get kafka -n kafka -o yaml || echo "Kafka CR not found"
+          echo "::endgroup::"
+
+          echo "::group::ArgoCD Operator Logs"
+          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=200 || echo "ArgoCD Operator logs not found"
+          echo "::endgroup::"
+
+          echo "::group::Strimzi Operator Logs"
+          kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=200 || echo "Strimzi Operator logs not found"
+          echo "::endgroup::"
+
+          echo "::group::Namespace Events (ArgoCD)"
+          kubectl get events -n argocd --sort-by='.lastTimestamp'
+          echo "::endgroup::"
+
+          echo "::group::Namespace Events (Kafka)"
+          kubectl get events -n kafka --sort-by='.lastTimestamp'
+          echo "::endgroup::"
+
           echo "::group::Node Status"
           kubectl get nodes -o wide
           echo "::endgroup::"
@@ -126,33 +154,13 @@ jobs:
 
           echo "::group::Traefik Service (NodePort Check)"
           kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik -o wide
-          kubectl describe svc -n kube-system -l app.kubernetes.io/name=traefik
           echo "::endgroup::"
 
           echo "::group::ArgoCD Service & Ingress"
           kubectl get svc -n argocd
-          kubectl describe svc -n argocd trading-argocd-server
           kubectl get ingress -n argocd
-          kubectl describe ingress -n argocd
           echo "::endgroup::"
 
           echo "::group::Kafka Services"
           kubectl get svc -n kafka -o wide
-          kubectl describe svc -n kafka
-          echo "::endgroup::"
-
-          echo "::group::Kafka Advertised Listeners"
-          kubectl logs -n kafka -l strimzi.io/name=trading-cluster-dual-role --tail=1000 | grep "advertised.listeners" || echo "advertised.listeners not found in logs"
-          echo "::endgroup::"
-          
-          echo "::group::Traefik Logs"
-          kubectl logs -n kube-system -l app.kubernetes.io/name=traefik --tail=100
-          echo "::endgroup::"
-
-          echo "::group::ArgoCD Server Logs"
-          kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=100
-          echo "::endgroup::"
-
-          echo "::group::Kafka Broker Logs"
-          kubectl logs -n kafka -l strimzi.io/name=trading-cluster-dual-role --tail=100
           echo "::endgroup::"
