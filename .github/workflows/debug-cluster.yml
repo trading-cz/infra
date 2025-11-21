@@ -27,22 +27,32 @@ jobs:
         id: discover
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          ENV: ${{ inputs.environment }}
         run: |
-          echo "🔍 Discovering Server IPs..."
+          echo "🔍 Discovering Server IPs for environment: $ENV..."
           
-          # Get Control Plane IP (k3s-control)
-          CONTROL_IP=$(hcloud server list -o columns=ipv4,name -o noheader | grep "k3s-control" | awk '{print $1}')
+          CLUSTER="k3s-trading"
+          CONTROL_NAME="${ENV}-${CLUSTER}-control"
+          KAFKA_NAME="${ENV}-${CLUSTER}-kafka-0"
+          
+          # Get Control Plane IP
+          CONTROL_IP=$(hcloud server list -o columns=ipv4,name -o noheader | grep "$CONTROL_NAME" | awk '{print $1}')
           
           # Get Kafka IP (kafka-0)
-          KAFKA_IP=$(hcloud server list -o columns=ipv4,name -o noheader | grep "kafka-0" | awk '{print $1}')
+          KAFKA_IP=$(hcloud server list -o columns=ipv4,name -o noheader | grep "$KAFKA_NAME" | awk '{print $1}')
           
           if [ -z "$CONTROL_IP" ]; then
-            echo "❌ Could not find k3s-control server"
+            echo "❌ Could not find server '$CONTROL_NAME'"
             exit 1
           fi
           
-          echo "✅ Found Control Plane: $CONTROL_IP"
-          echo "✅ Found Kafka Node: $KAFKA_IP"
+          echo "✅ Found Control Plane ($CONTROL_NAME): $CONTROL_IP"
+          
+          if [ -n "$KAFKA_IP" ]; then
+            echo "✅ Found Kafka Node ($KAFKA_NAME): $KAFKA_IP"
+          else
+            echo "⚠️ Kafka Node ($KAFKA_NAME) not found"
+          fi
           
           echo "control_plane_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
           echo "kafka_ip=$KAFKA_IP" >> $GITHUB_OUTPUT
