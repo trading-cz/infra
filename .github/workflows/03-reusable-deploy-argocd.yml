@@ -18,6 +18,9 @@ on:
       token_git_repo_config:
         description: 'Token for config repo access'
         required: true
+      argocd_admin_password:
+        description: 'Admin password for ArgoCD'
+        required: false
 
 jobs:
   deploy-argocd:
@@ -106,6 +109,24 @@ jobs:
           
           echo "✅ ArgoCD is UP!"
           kubectl get pods -n argocd
+
+      - name: Set ArgoCD Admin Password
+        if: ${{ secrets.argocd_admin_password != '' }}
+        env:
+          ARGOCD_ADMIN_PASSWORD: ${{ secrets.argocd_admin_password }}
+        run: |
+          echo "🔐 Updating ArgoCD admin password..."
+          pip install bcrypt
+          
+          # Generate bcrypt hash
+          HASH=$(python3 -c 'import bcrypt, os; print(bcrypt.hashpw(os.environ["ARGOCD_ADMIN_PASSWORD"].encode(), bcrypt.gensalt()).decode())')
+          
+          # Patch the secret using stringData (automatically base64 encodes)
+          # The secret name is <cr-name>-cluster -> trading-argocd-cluster
+          kubectl patch secret trading-argocd-cluster -n argocd --type=merge -p "{\"stringData\": {\"admin.password\": \"$HASH\"}}"
+          
+          echo "✅ Password updated. Restarting ArgoCD server..."
+          kubectl rollout restart deployment/trading-argocd-server -n argocd
 
       - name: Debug on Failure
         if: failure()

@@ -54,6 +54,7 @@ jobs:
     secrets:
       ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
       token_git_repo_config: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
+      argocd_admin_password: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}
 
   verify_access:
     needs: [provision, deploy_argocd]
