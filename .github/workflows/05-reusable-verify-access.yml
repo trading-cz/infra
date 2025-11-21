@@ -124,18 +124,25 @@ jobs:
           kubectl get pods -A -o wide
           echo "::endgroup::"
 
-          echo "::group::ArgoCD Service"
+          echo "::group::Traefik Service (NodePort Check)"
+          kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik -o wide
+          kubectl describe svc -n kube-system -l app.kubernetes.io/name=traefik
+          echo "::endgroup::"
+
+          echo "::group::ArgoCD Service & Ingress"
           kubectl get svc -n argocd
           kubectl describe svc -n argocd trading-argocd-server
+          kubectl get ingress -n argocd
+          kubectl describe ingress -n argocd
           echo "::endgroup::"
 
-          echo "::group::Kafka Service"
-          kubectl get svc -n kafka
-          kubectl describe svc -n kafka trading-cluster-kafka-external-bootstrap
+          echo "::group::Kafka Services"
+          kubectl get svc -n kafka -o wide
+          kubectl describe svc -n kafka
           echo "::endgroup::"
 
-          echo "::group::Ingress Status"
-          kubectl get ingress -A
+          echo "::group::Kafka Advertised Listeners"
+          kubectl logs -n kafka -l strimzi.io/name=trading-cluster-dual-role --tail=1000 | grep "advertised.listeners" || echo "advertised.listeners not found in logs"
           echo "::endgroup::"
           
           echo "::group::Traefik Logs"
