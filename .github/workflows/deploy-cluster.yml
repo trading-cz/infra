@@ -35,8 +35,17 @@ jobs:
     secrets:
       ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-  deploy_argocd:
+  deploy_strimzi:
     needs: [provision, verify_cluster]
+    if: needs.provision.result == 'success'
+    uses: trading-cz/infra/.github/workflows/04-reusable-deploy-strimzi.yml@main
+    with:
+      control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
+    secrets:
+      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+  deploy_argocd:
+    needs: [provision, verify_cluster, deploy_strimzi]
     if: needs.provision.result == 'success'
     uses: trading-cz/infra/.github/workflows/03-reusable-deploy-argocd.yml@main
     with:
@@ -44,15 +53,6 @@ jobs:
     secrets:
       ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
       token_git_repo_config: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
-
-  deploy_strimzi:
-    needs: [provision, deploy_argocd]
-    if: needs.provision.result == 'success'
-    uses: trading-cz/infra/.github/workflows/04-reusable-deploy-strimzi.yml@main
-    with:
-      control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
-    secrets:
-      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
   cleanup_on_failure:
     name: Auto-Cleanup on Failure
