@@ -7,6 +7,10 @@ on:
         description: 'Control Plane IP'
         required: true
         type: string
+      kafka_public_ip:
+        description: 'Public IP of Kafka Node'
+        required: true
+        type: string
     secrets:
       ssh_private_key:
         description: 'SSH private key for server access'
@@ -72,6 +76,12 @@ jobs:
           echo "🚀 Creating ArgoCD Namespace..."
           kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
+          echo "🔧 Patching Kafka Config with Public IP..."
+          # We need to inject the real Public IP into the Kafka CR before applying it
+          # This is a simple text replacement in the checked-out config
+          KAFKA_IP="${{ inputs.kafka_public_ip }}"
+          sed -i "s/advertisedHost: .*/advertisedHost: $KAFKA_IP/" config/base/kafka/kafka.yaml
+          
           echo "🌱 Bootstrapping ArgoCD from Config Repo..."
           # Apply the minimal overlay which contains the ArgoCD CR
           kubectl apply -k config/overlays/minimal

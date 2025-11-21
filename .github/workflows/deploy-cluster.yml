@@ -50,13 +50,24 @@ jobs:
     uses: trading-cz/infra/.github/workflows/03-reusable-deploy-argocd.yml@main
     with:
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
+      kafka_public_ip: ${{ needs.provision.outputs.kafka_ip }}
     secrets:
       ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
       token_git_repo_config: ${{ secrets.TOKEN_GIT_REPO_CONFIG }}
 
+  verify_access:
+    needs: [provision, deploy_argocd]
+    if: needs.provision.result == 'success'
+    uses: trading-cz/infra/.github/workflows/05-reusable-verify-access.yml@main
+    with:
+      control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
+      kafka_ip: ${{ needs.provision.outputs.kafka_ip }}
+    secrets:
+      ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
   cleanup_on_failure:
     name: Auto-Cleanup on Failure
-    needs: [provision, verify_cluster, deploy_argocd, deploy_strimzi]
+    needs: [provision, verify_cluster, deploy_argocd, deploy_strimzi, verify_access]
     if: failure()
     uses: trading-cz/infra/.github/workflows/hcloud-maintenance.yml@main
     with:
@@ -67,7 +78,7 @@ jobs:
 
   summary:
     name: Deployment Summary
-    needs: [provision, verify_clean, verify_cluster, deploy_argocd, deploy_strimzi, cleanup_on_failure]
+    needs: [provision, verify_clean, verify_cluster, deploy_argocd, deploy_strimzi, verify_access, cleanup_on_failure]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -79,6 +90,7 @@ jobs:
           echo "Environment: ${{ inputs.environment }}"
           echo "Control Plane IP: ${{ needs.provision.outputs.control_plane_ip }}"
           echo "ArgoCD UI: https://${{ needs.provision.outputs.control_plane_ip }}"
+          echo "Kafka Broker: ${{ needs.provision.outputs.kafka_ip }}:33333"
           echo "---"
           echo "Job Statuses:"
           echo "Verify Clean:    ${{ needs.verify_clean.result }}"
@@ -86,9 +98,10 @@ jobs:
           echo "Verify Cluster:  ${{ needs.verify_cluster.result }}"
           echo "Deploy ArgoCD:   ${{ needs.deploy_argocd.result }}"
           echo "Deploy Strimzi:  ${{ needs.deploy_strimzi.result }}"
+          echo "Verify Access:   ${{ needs.verify_access.result }}"
           echo "Auto Cleanup:    ${{ needs.cleanup_on_failure.result }}"
           echo "========================================"
-          if [[ "${{ needs.verify_clean.result }}" != "success" || "${{ needs.provision.result }}" != "success" || "${{ needs.verify_cluster.result }}" != "success" || "${{ needs.deploy_argocd.result }}" != "success" || "${{ needs.deploy_strimzi.result }}" != "success" ]]; then
+          if [[ "${{ needs.verify_clean.result }}" != "success" || "${{ needs.provision.result }}" != "success" || "${{ needs.verify_cluster.result }}" != "success" || "${{ needs.deploy_argocd.result }}" != "success" || "${{ needs.deploy_strimzi.result }}" != "success" || "${{ needs.verify_access.result }}" != "success" ]]; then
             echo "❌ One or more jobs failed."
             if [[ "${{ needs.cleanup_on_failure.result }}" == "success" ]]; then
                echo "🧹 Auto-cleanup executed successfully."

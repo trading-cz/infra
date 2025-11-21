@@ -1,0 +1,143 @@
+name: 'Reusable: Verify External Access'
+
+on:
+  workflow_call:
+    inputs:
+      control_plane_ip:
+        description: 'Control Plane IP (ArgoCD)'
+        required: true
+        type: string
+      kafka_ip:
+        description: 'Kafka Node IP'
+        required: true
+        type: string
+    secrets:
+      ssh_private_key:
+        description: 'SSH private key for server access'
+        required: true
+
+jobs:
+  verify-access:
+    name: Verify External Access
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ssh_private_key }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Download Kubeconfig
+        run: |
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          mkdir -p ~/.kube
+          
+          echo "📥 Downloading kubeconfig from $CONTROL_IP..."
+          for i in {1..5}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
+              sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
+              chmod 600 ~/.kube/config
+              echo "✅ Kubeconfig downloaded"
+              break
+            fi
+            echo "⚠️ Retry $i/5..."
+            sleep 5
+          done
+
+      - name: Install kcat (kafkacat)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kafkacat
+
+      - name: Verify ArgoCD UI (HTTPS)
+        id: argocd
+        continue-on-error: true
+        run: |
+          echo "🌐 Checking ArgoCD UI at https://${{ inputs.control_plane_ip }}..."
+          # -k allows insecure (self-signed cert), -f fails on 404/500 errors
+          if curl -k -f --connect-timeout 10 "https://${{ inputs.control_plane_ip }}"; then
+            echo "✅ ArgoCD UI is accessible!"
+          else
+            echo "❌ Failed to access ArgoCD UI"
+            exit 1
+          fi
+
+      - name: Verify Kafka External Access
+        id: kafka
+        continue-on-error: true
+        run: |
+          echo "🐘 Checking Kafka Broker at ${{ inputs.kafka_ip }}:33333..."
+          # -L: Metadata list mode
+          # -b: Broker list
+          # -t: Timeout (5s)
+          if kcat -L -b "${{ inputs.kafka_ip }}:33333" -t 5000; then
+            echo "✅ Kafka Broker is accessible externally!"
+          else
+            echo "❌ Failed to connect to Kafka Broker"
+            echo "   Possible causes: Firewall closed, NodePort not listening, or Advertised Listener mismatch."
+            exit 1
+          fi
+
+      - name: Check Verification Results
+        if: always()
+        run: |
+          echo "========================================"
+          echo "  Verification Results"
+          echo "========================================"
+          FAILED=false
+          
+          if [ "${{ steps.argocd.outcome }}" == "success" ]; then
+            echo "✅ ArgoCD: Accessible"
+          else
+            echo "❌ ArgoCD: FAILED"
+            FAILED=true
+          fi
+          
+          if [ "${{ steps.kafka.outcome }}" == "success" ]; then
+            echo "✅ Kafka:  Accessible"
+          else
+            echo "❌ Kafka:  FAILED"
+            FAILED=true
+          fi
+          
+          echo "========================================"
+          if [ "$FAILED" = true ]; then
+            exit 1
+          fi
+
+      - name: Debug on Failure
+        if: failure()
+        run: |
+          echo "❌ Verification Failed. Dumping Cluster State..."
+          
+          echo "::group::Node Status"
+          kubectl get nodes -o wide
+          echo "::endgroup::"
+
+          echo "::group::All Pods"
+          kubectl get pods -A -o wide
+          echo "::endgroup::"
+
+          echo "::group::ArgoCD Service"
+          kubectl get svc -n argocd
+          kubectl describe svc -n argocd trading-argocd-server
+          echo "::endgroup::"
+
+          echo "::group::Kafka Service"
+          kubectl get svc -n kafka
+          kubectl describe svc -n kafka trading-cluster-kafka-external-bootstrap
+          echo "::endgroup::"
+
+          echo "::group::Ingress Status"
+          kubectl get ingress -A
+          echo "::endgroup::"
+          
+          echo "::group::Traefik Logs"
+          kubectl logs -n kube-system -l app.kubernetes.io/name=traefik --tail=50
+          echo "::endgroup::"
