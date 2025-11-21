@@ -53,8 +53,13 @@ jobs:
 
           echo "📦 Installing Strimzi Operator (Latest)..."
           # Using the official install file which includes CRDs and Deployment
-          # Use apply instead of create to be idempotent (avoid AlreadyExists errors)
-          kubectl apply -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
+          # Use apply --server-side to handle large CRDs and avoid annotation issues
+          # --force-conflicts allows taking ownership of fields managed by other managers (like 'kubectl create')
+          kubectl apply -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka --server-side --force-conflicts
+
+          echo "⏳ Waiting for Strimzi Cluster Operator to start..."
+          # Wait for the deployment to be created before waiting for availability
+          kubectl wait --for=condition=Available deployment/strimzi-cluster-operator -n kafka --timeout=300s
 
       - name: Verify Strimzi Installation
         run: |
