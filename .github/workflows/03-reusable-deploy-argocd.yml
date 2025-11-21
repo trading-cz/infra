@@ -111,10 +111,14 @@ jobs:
           kubectl get pods -n argocd
 
       - name: Set ArgoCD Admin Password
-        if: ${{ secrets.argocd_admin_password != '' }}
         env:
           ARGOCD_ADMIN_PASSWORD: ${{ secrets.argocd_admin_password }}
         run: |
+          if [ -z "$ARGOCD_ADMIN_PASSWORD" ]; then
+            echo "No admin password provided. Skipping."
+            exit 0
+          fi
+
           echo "🔐 Updating ArgoCD admin password..."
           pip install bcrypt
           
