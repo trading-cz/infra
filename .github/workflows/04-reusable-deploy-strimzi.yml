@@ -53,7 +53,8 @@ jobs:
 
           echo "📦 Installing Strimzi Operator (Latest)..."
           # Using the official install file which includes CRDs and Deployment
-          kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
+          # Use apply instead of create to be idempotent (avoid AlreadyExists errors)
+          kubectl apply -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka
 
       - name: Verify Strimzi Installation
         run: |
