@@ -139,5 +139,13 @@ jobs:
           echo "::endgroup::"
           
           echo "::group::Traefik Logs"
-          kubectl logs -n kube-system -l app.kubernetes.io/name=traefik --tail=50
+          kubectl logs -n kube-system -l app.kubernetes.io/name=traefik --tail=100
+          echo "::endgroup::"
+
+          echo "::group::ArgoCD Server Logs"
+          kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=100
+          echo "::endgroup::"
+
+          echo "::group::Kafka Broker Logs"
+          kubectl logs -n kafka -l strimzi.io/name=trading-cluster-dual-role --tail=100
           echo "::endgroup::"
