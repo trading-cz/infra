@@ -47,20 +47,30 @@ jobs:
             sleep 5
           done
 
-      - name: Install ArgoCD
+      - name: Install ArgoCD Operator
+        run: |
+          echo "📦 Installing ArgoCD Operator..."
+          # Install ArgoCD Operator (Non-OLM)
+          kubectl apply -k https://github.com/argoproj-labs/argocd-operator/config/default?ref=v0.15.0-1
+          
+          echo "⏳ Waiting for Operator..."
+          kubectl wait --for=condition=available deployment/argocd-operator-controller-manager -n argocd-operator-system --timeout=300s
+
+      - name: Bootstrap ArgoCD Instance
         run: |
           echo "🚀 Creating ArgoCD Namespace..."
           kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
-          echo "📦 Installing ArgoCD Manifests..."
-          kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+          echo "🌱 Bootstrapping ArgoCD from Config Repo..."
+          # Apply the minimal overlay which contains the ArgoCD CR
+          kubectl apply -k https://github.com/trading-cz/config/overlays/minimal
 
-      - name: Verify ArgoCD Installation
+      - name: Verify ArgoCD Instance
         run: |
-          echo "⏳ Waiting for ArgoCD components to be ready..."
-          kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=300s
-          kubectl wait --for=condition=available deployment/argocd-repo-server -n argocd --timeout=300s
-          kubectl wait --for=condition=available deployment/argocd-dex-server -n argocd --timeout=300s
+          echo "⏳ Waiting for ArgoCD Server (trading-argocd-server)..."
+          # The operator creates resources with the CR name as prefix
+          kubectl wait --for=condition=available deployment/trading-argocd-server -n argocd --timeout=300s
+          kubectl wait --for=condition=available deployment/trading-argocd-repo-server -n argocd --timeout=300s
           
           echo "✅ ArgoCD is UP!"
           kubectl get pods -n argocd
@@ -69,16 +79,19 @@ jobs:
         if: failure()
         run: |
           echo "❌ ArgoCD Deployment Failed. Dumping State..."
-          echo "::group::ArgoCD Pods"
-          kubectl get pods -n argocd -o wide
+          echo "::group::ArgoCD Operator Pods"
+          kubectl get pods -n argocd-operator-system -o wide || true
+          echo "::endgroup::"
+          echo "::group::ArgoCD Operator Logs"
+          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 || true
+          echo "::endgroup::"
+          echo "::group::ArgoCD Namespace Pods"
+          kubectl get pods -n argocd -o wide || true
           echo "::endgroup::"
           echo "::group::ArgoCD Events"
-          kubectl get events -n argocd --sort-by='.lastTimestamp'
+          kubectl get events -n argocd --sort-by='.lastTimestamp' || true
           echo "::endgroup::"
           echo "::group::ArgoCD Server Logs"
-          kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server --tail=50 || true
-          echo "::endgroup::"
-          echo "::group::ArgoCD Repo Server Logs"
-          kubectl logs -n argocd -l app.kubernetes.io/name=argocd-repo-server --tail=50 || true
+          kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=50 || true
           echo "::endgroup::"
 
