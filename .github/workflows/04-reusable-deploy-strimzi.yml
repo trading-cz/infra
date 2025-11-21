@@ -51,11 +51,15 @@ jobs:
           echo "🚀 Creating Kafka Namespace..."
           kubectl create namespace kafka --dry-run=client -o yaml | kubectl apply -f -
 
+          echo "🧹 Cleaning up any potential conflicting deployment..."
+          # Delete the deployment if it exists to ensure a clean install/upgrade
+          # This avoids the "Invalid value" error which can happen during updates or SSA
+          kubectl delete deployment strimzi-cluster-operator -n kafka --ignore-not-found=true
+
           echo "📦 Installing Strimzi Operator (Latest)..."
-          # Using the official install file which includes CRDs and Deployment
-          # Use apply --server-side to handle large CRDs and avoid annotation issues
-          # --force-conflicts allows taking ownership of fields managed by other managers (like 'kubectl create')
-          kubectl apply -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka --server-side --force-conflicts
+          # Using standard Client-Side Apply (kubectl apply)
+          # This is more lenient than Server-Side Apply for this specific manifest
+          kubectl apply -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka --force
 
           echo "⏳ Waiting for Strimzi Cluster Operator to start..."
           # Wait for the deployment to be created before waiting for availability
@@ -83,5 +87,8 @@ jobs:
           kubectl get events -n kafka --sort-by='.lastTimestamp'
           echo "::endgroup::"
           echo "::group::Strimzi Operator Logs"
-          kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=50 || true
+          kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=100 || true
+          echo "::endgroup::"
+          echo "::group::Describe Pod"
+          kubectl describe pod -n kafka -l name=strimzi-cluster-operator
           echo "::endgroup::"

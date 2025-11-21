@@ -12,7 +12,16 @@ on:
           - prod
 
 jobs:
+  verify_clean:
+    uses: trading-cz/infra/.github/workflows/hcloud-maintenance.yml@main
+    with:
+      env: ${{ inputs.environment }}
+      action: 'check-clean'
+    secrets:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+
   provision:
+    needs: verify_clean
     uses: trading-cz/infra/.github/workflows/01-reusable-provision-infra.yml@main
     with:
       environment: ${{ inputs.environment }}
@@ -46,7 +55,7 @@ jobs:
 
   summary:
     name: Deployment Summary
-    needs: [provision, verify_cluster, deploy_argocd, deploy_strimzi]
+    needs: [provision, verify_clean, verify_cluster, deploy_argocd, deploy_strimzi]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -60,12 +69,13 @@ jobs:
           echo "ArgoCD UI: https://${{ needs.provision.outputs.control_plane_ip }}"
           echo "---"
           echo "Job Statuses:"
+          echo "Verify Clean:    ${{ needs.verify_clean.result }}"
           echo "Provision Infra: ${{ needs.provision.result }}"
           echo "Verify Cluster:  ${{ needs.verify_cluster.result }}"
           echo "Deploy ArgoCD:   ${{ needs.deploy_argocd.result }}"
           echo "Deploy Strimzi:  ${{ needs.deploy_strimzi.result }}"
           echo "========================================"
-          if [[ "${{ needs.provision.result }}" != "success" || "${{ needs.verify_cluster.result }}" != "success" || "${{ needs.deploy_argocd.result }}" != "success" || "${{ needs.deploy_strimzi.result }}" != "success" ]]; then
+          if [[ "${{ needs.verify_clean.result }}" != "success" || "${{ needs.provision.result }}" != "success" || "${{ needs.verify_cluster.result }}" != "success" || "${{ needs.deploy_argocd.result }}" != "success" || "${{ needs.deploy_strimzi.result }}" != "success" ]]; then
             echo "❌ One or more jobs failed."
             exit 1
           fi

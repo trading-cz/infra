@@ -1,6 +1,19 @@
 name: hcloud-maintenance
 
 on:
+  workflow_call:
+    inputs:
+      env:
+        description: "Environment to target (dev|prod)"
+        required: true
+        type: string
+      action:
+        description: "Action to perform"
+        required: true
+        type: string
+    secrets:
+      HCLOUD_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       env:
@@ -14,7 +27,7 @@ on:
         required: true
         default: "list"
         type: choice
-        options: [list, destroy-cluster, destroy-all]
+        options: [list, destroy-cluster, destroy-all, check-clean]
   schedule:
     - cron: '30 23 * * *'
 
@@ -34,6 +47,42 @@ jobs:
           chmod +x hcloud
           sudo mv hcloud /usr/local/bin/
           hcloud version
+
+      # ---------- CHECK CLEAN (Pre-flight) ----------
+      - name: Check Clean State
+        if: ${{ env.TARGET_ACTION == 'check-clean' }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV="${{ env.TARGET_ENV }}"
+          CLUSTER="k3s-trading"
+          
+          echo "🔍 Checking for existing servers in environment: $ENV..."
+          
+          # Check for Control Plane
+          CONTROL_NAME="${ENV}-${CLUSTER}-control"
+          if hcloud server list -o noheader | grep -q "$CONTROL_NAME"; then
+            echo "❌ CRITICAL: Server '$CONTROL_NAME' already exists!"
+            echo "   This indicates a previous deployment (possibly failed) was not cleaned up."
+            echo "   Provisioning on top of this may lead to an inconsistent state."
+            echo "👉 ACTION REQUIRED: Run 'Destroy Cluster' workflow first."
+            exit 1
+          else
+            echo "✅ Control Plane '$CONTROL_NAME' does not exist (Clean)."
+          fi
+
+          # Check for Kafka Nodes
+          KAFKA_PREFIX="${ENV}-${CLUSTER}-kafka"
+          if hcloud server list -o noheader | grep -q "$KAFKA_PREFIX"; then
+            echo "❌ CRITICAL: Kafka servers ('$KAFKA_PREFIX*') already exist!"
+            echo "👉 ACTION REQUIRED: Run 'Destroy Cluster' workflow first."
+            exit 1
+          else
+            echo "✅ No Kafka servers found (Clean)."
+          fi
+          
+          echo "✨ Environment appears clean. Ready for provisioning."
 
       # ---------- LIST ----------
       - name: List all resources by env
