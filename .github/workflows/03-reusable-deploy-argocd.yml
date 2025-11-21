@@ -51,7 +51,8 @@ jobs:
         run: |
           echo "📦 Installing ArgoCD Operator..."
           # Install ArgoCD Operator (Non-OLM)
-          kubectl apply -k https://github.com/argoproj-labs/argocd-operator/config/default?ref=v0.15.0-1
+          # Use server-side apply to avoid "metadata.annotations: Too long" error for CRDs
+          kubectl apply --server-side -k https://github.com/argoproj-labs/argocd-operator/config/default?ref=v0.15.0-1
           
           echo "⏳ Waiting for Operator..."
           kubectl wait --for=condition=available deployment/argocd-operator-controller-manager -n argocd-operator-system --timeout=300s
