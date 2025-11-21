@@ -11,6 +11,9 @@ on:
       ssh_private_key:
         description: 'SSH private key for server access'
         required: true
+      token_git_repo_config:
+        description: 'Token for config repo access'
+        required: true
 
 jobs:
   deploy-argocd:
@@ -62,6 +65,7 @@ jobs:
         with:
           repository: trading-cz/config
           path: config
+          token: ${{ secrets.token_git_repo_config }}
 
       - name: Bootstrap ArgoCD Instance
         run: |
