@@ -263,11 +263,15 @@ jobs:
           
           EXPECTED_COMPONENTS=("trading-argocd-server" "trading-argocd-repo-server" "trading-argocd-redis" "trading-argocd-application-controller")
           
+          echo "Checking operator logs for any errors..."
+          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 | head -20
+          echo ""
+          
           echo "Waiting for all ArgoCD components to be created..."
           ATTEMPT=0
           FOUND_COMPONENTS=0
           
-          while [ $ATTEMPT -lt 60 ]; do
+          while [ $ATTEMPT -lt 90 ]; do
             FOUND_COMPONENTS=0
             for COMP in "${EXPECTED_COMPONENTS[@]}"; do
               if kubectl get deployment "$COMP" -n argocd &>/dev/null 2>&1 || \
@@ -281,19 +285,36 @@ jobs:
               break
             fi
             
-            echo "  Attempt $((ATTEMPT+1))/60: Found $FOUND_COMPONENTS/${#EXPECTED_COMPONENTS[@]} components..."
-            sleep 2
+            echo "  Attempt $((ATTEMPT+1))/120: Found $FOUND_COMPONENTS/${#EXPECTED_COMPONENTS[@]} components..."
+            
+            # Every 10 attempts, show debug info
+            if [ $((ATTEMPT % 10)) -eq 0 ] && [ $ATTEMPT -gt 0 ]; then
+              echo ""
+              echo "  Debug info (attempt $ATTEMPT):"
+              echo "    ArgoCD CR status:"
+              kubectl get argocd trading-argocd -n argocd -o jsonpath='{.status}' | head -c 200
+              echo ""
+              echo "    Recent operator logs:"
+              kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=5 || true
+              echo ""
+            fi
+            
+            sleep 1
             ((ATTEMPT++))
           done
           
           if [ $FOUND_COMPONENTS -ne ${#EXPECTED_COMPONENTS[@]} ]; then
+            echo ""
             echo "❌ Not all components created (found $FOUND_COMPONENTS/${#EXPECTED_COMPONENTS[@]})"
             echo ""
             echo "Available resources in argocd namespace:"
             kubectl get all -n argocd
             echo ""
-            echo "Operator logs:"
-            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 || true
+            echo "Operator logs (last 100 lines):"
+            kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=100 || true
+            echo ""
+            echo "ArgoCD CR full details:"
+            kubectl get argocd trading-argocd -n argocd -o yaml || true
             exit 1
           fi
           
