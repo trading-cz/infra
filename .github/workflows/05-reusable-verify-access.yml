@@ -76,8 +76,13 @@ jobs:
           echo "🐘 Checking Kafka Broker at ${{ inputs.kafka_ip }}:30002..."
           # -L: Metadata list mode
           # -b: Broker list
-          # -t: Timeout (5s)
-          if kcat -L -b "${{ inputs.kafka_ip }}:30002" -t 5000; then
+          # -t: Topic (optional, but here used incorrectly as timeout in previous version)
+          # Correct usage: -T (timeout in ms) is not a standard flag for kcat in all versions, 
+          # but usually it's -m <timeout> for metadata timeout.
+          # However, the user's log shows "Metadata for 5000", which means `5000` was interpreted as a topic name.
+          
+          # We will use a simple metadata list command without the confusing argument.
+          if kcat -L -b "${{ inputs.kafka_ip }}:30002"; then
             echo "✅ Kafka Broker is accessible externally!"
           else
             echo "❌ Failed to connect to Kafka Broker"
