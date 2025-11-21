@@ -59,11 +59,16 @@ jobs:
         id: argocd
         continue-on-error: true
         run: |
-          echo "🌐 Checking ArgoCD UI at https://${{ inputs.control_plane_ip }}:30443..."
+          URL="https://${{ inputs.control_plane_ip }}:30443"
+          echo "🌐 Checking ArgoCD UI at $URL..."
           # -k allows insecure (self-signed cert), -f fails on 404/500 errors
-          # We use -H "Host: argocd.local" because the Ingress is configured with this hostname
-          if curl -k -f --connect-timeout 10 -H "Host: argocd.local" "https://${{ inputs.control_plane_ip }}:30443"; then
+          # We removed -H "Host: argocd.local" to verify access via IP directly
+          if curl -k -f --connect-timeout 10 "$URL"; then
             echo "✅ ArgoCD UI is accessible!"
+            # Add clickable link to Job Summary
+            echo "### 🚀 ArgoCD Access" >> $GITHUB_STEP_SUMMARY
+            echo "✅ UI is accessible at: **[$URL]($URL)**" >> $GITHUB_STEP_SUMMARY
+            echo "> Note: You will see a security warning because of the self-signed certificate." >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ Failed to access ArgoCD UI"
             exit 1
