@@ -90,7 +90,7 @@ jobs:
           echo "Environment: ${{ inputs.environment }}"
           echo "Control Plane IP: ${{ needs.provision.outputs.control_plane_ip }}"
           echo "ArgoCD UI: https://${{ needs.provision.outputs.control_plane_ip }}:30443"
-          echo "Kafka Broker: ${{ needs.provision.outputs.kafka_ip }}:33333"
+          echo "Kafka Broker: ${{ needs.provision.outputs.kafka_ip }}:30002"
           echo "---"
           echo "Job Statuses:"
           echo "Verify Clean:    ${{ needs.verify_clean.result }}"

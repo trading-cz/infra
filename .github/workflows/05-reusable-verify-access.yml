@@ -61,7 +61,8 @@ jobs:
         run: |
           echo "🌐 Checking ArgoCD UI at https://${{ inputs.control_plane_ip }}:30443..."
           # -k allows insecure (self-signed cert), -f fails on 404/500 errors
-          if curl -k -f --connect-timeout 10 "https://${{ inputs.control_plane_ip }}:30443"; then
+          # We use -H "Host: argocd.local" because the Ingress is configured with this hostname
+          if curl -k -f --connect-timeout 10 -H "Host: argocd.local" "https://${{ inputs.control_plane_ip }}:30443"; then
             echo "✅ ArgoCD UI is accessible!"
           else
             echo "❌ Failed to access ArgoCD UI"
@@ -72,11 +73,11 @@ jobs:
         id: kafka
         continue-on-error: true
         run: |
-          echo "🐘 Checking Kafka Broker at ${{ inputs.kafka_ip }}:33333..."
+          echo "🐘 Checking Kafka Broker at ${{ inputs.kafka_ip }}:30002..."
           # -L: Metadata list mode
           # -b: Broker list
           # -t: Timeout (5s)
-          if kcat -L -b "${{ inputs.kafka_ip }}:33333" -t 5000; then
+          if kcat -L -b "${{ inputs.kafka_ip }}:30002" -t 5000; then
             echo "✅ Kafka Broker is accessible externally!"
           else
             echo "❌ Failed to connect to Kafka Broker"
@@ -114,53 +115,65 @@ jobs:
       - name: Debug on Failure
         if: failure()
         run: |
-          echo "❌ Verification Failed. Dumping Cluster State..."
+          echo "======================================================="
+          echo "🔍 COMPREHENSIVE DEBUGGING REPORT"
+          echo "======================================================="
           
-          echo "::group::CRD Status"
-          kubectl get crd | grep -E 'argocd|kafka|strimzi'
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          KAFKA_IP="${{ inputs.kafka_ip }}"
+
+          echo "::group::1. Host Port Check (OS Level)"
+          echo "Checking what is actually listening on the nodes..."
+          echo "--- Control Plane ($CONTROL_IP) ---"
+          ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ss -tulpn | grep -E ':(30443|30002|30080)' || echo '❌ Ports not found in ss output'"
+          
+          echo "--- Kafka Node ($KAFKA_IP) ---"
+          ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "ss -tulpn | grep -E ':(30443|30002|30080)' || echo '❌ Ports not found in ss output'"
           echo "::endgroup::"
 
-          echo "::group::ArgoCD CR Status"
-          kubectl get argocd -n argocd -o yaml || echo "ArgoCD CR not found"
-          echo "::endgroup::"
-
-          echo "::group::Kafka CR Status"
-          kubectl get kafka -n kafka -o yaml || echo "Kafka CR not found"
-          echo "::endgroup::"
-
-          echo "::group::ArgoCD Operator Logs"
-          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=200 || echo "ArgoCD Operator logs not found"
-          echo "::endgroup::"
-
-          echo "::group::Strimzi Operator Logs"
-          kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=200 || echo "Strimzi Operator logs not found"
-          echo "::endgroup::"
-
-          echo "::group::Namespace Events (ArgoCD)"
-          kubectl get events -n argocd --sort-by='.lastTimestamp'
-          echo "::endgroup::"
-
-          echo "::group::Namespace Events (Kafka)"
-          kubectl get events -n kafka --sort-by='.lastTimestamp'
-          echo "::endgroup::"
-
-          echo "::group::Node Status"
+          echo "::group::2. Cluster State (Nodes & Pods)"
           kubectl get nodes -o wide
-          echo "::endgroup::"
-
-          echo "::group::All Pods"
+          echo "---------------------------------------------------"
           kubectl get pods -A -o wide
           echo "::endgroup::"
 
-          echo "::group::Traefik Service (NodePort Check)"
-          kubectl get svc -n kube-system -l app.kubernetes.io/name=traefik -o wide
+          echo "::group::3. Service Connectivity (Services & Endpoints)"
+          echo "Checking if Services have active Endpoints (Pods)..."
+          kubectl get svc -A -o wide
+          echo "---------------------------------------------------"
+          kubectl get endpoints -A
           echo "::endgroup::"
 
-          echo "::group::ArgoCD Service & Ingress"
-          kubectl get svc -n argocd
-          kubectl get ingress -n argocd
+          echo "::group::4. ArgoCD Diagnostics (Ingress & CR)"
+          echo "Ingress Definition:"
+          kubectl get ingress -n argocd -o yaml
+          echo "---------------------------------------------------"
+          echo "ArgoCD CR Status:"
+          kubectl get argocd -n argocd -o yaml || echo "ArgoCD CR not found"
+          echo "---------------------------------------------------"
+          echo "Traefik Logs (Routing Errors):"
+          kubectl logs -n kube-system -l app.kubernetes.io/name=traefik --tail=50
+          echo "---------------------------------------------------"
+          echo "ArgoCD Server Logs:"
+          kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=50
+          echo "---------------------------------------------------"
+          echo "ArgoCD Namespace Events:"
+          kubectl get events -n argocd --sort-by='.lastTimestamp'
           echo "::endgroup::"
 
-          echo "::group::Kafka Services"
-          kubectl get svc -n kafka -o wide
+          echo "::group::5. Kafka Diagnostics (Broker & CR)"
+          echo "Kafka Service Definition:"
+          kubectl get svc -n kafka -o yaml
+          echo "---------------------------------------------------"
+          echo "Kafka CR Status:"
+          kubectl get kafka -n kafka -o yaml || echo "Kafka CR not found"
+          echo "---------------------------------------------------"
+          echo "Kafka Broker Logs (Startup & Listeners):"
+          kubectl logs -n kafka -l strimzi.io/name=trading-cluster-dual-role --tail=100
+          echo "---------------------------------------------------"
+          echo "Strimzi Operator Logs:"
+          kubectl logs -n kafka -l name=strimzi-cluster-operator --tail=50
+          echo "---------------------------------------------------"
+          echo "Kafka Namespace Events:"
+          kubectl get events -n kafka --sort-by='.lastTimestamp'
           echo "::endgroup::"
