@@ -57,6 +57,12 @@ jobs:
           echo "⏳ Waiting for Operator..."
           kubectl wait --for=condition=available deployment/argocd-operator-controller-manager -n argocd-operator-system --timeout=300s
 
+      - name: Checkout Config Repo
+        uses: actions/checkout@v4
+        with:
+          repository: trading-cz/config
+          path: config
+
       - name: Bootstrap ArgoCD Instance
         run: |
           echo "🚀 Creating ArgoCD Namespace..."
@@ -64,7 +70,7 @@ jobs:
 
           echo "🌱 Bootstrapping ArgoCD from Config Repo..."
           # Apply the minimal overlay which contains the ArgoCD CR
-          kubectl apply -k https://github.com/trading-cz/config/overlays/minimal
+          kubectl apply -k config/overlays/minimal
 
       - name: Verify ArgoCD Instance
         run: |
