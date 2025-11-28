@@ -48,13 +48,15 @@ jobs:
         run: |
           kubectl get nodes
           NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
-          # Expect 1 control plane + kafka_node_count (3 for KRaft quorum)
-          # Minimum is 4 nodes (1 control + 3 kafka) for production/dev with HA
-          if [ "$NODE_COUNT" -ge 4 ]; then
-            echo "✅ K3s cluster operational with $NODE_COUNT nodes (1 control + $((NODE_COUNT-1)) kafka)"
+          # Expect 1 control plane + kafka_node_count (3) + worker_node_count (1) = 5 nodes
+          # Minimum is 5 nodes for full deployment (1 control + 3 kafka + 1 worker)
+          if [ "$NODE_COUNT" -ge 5 ]; then
+            echo "✅ K3s cluster operational with $NODE_COUNT nodes (1 control + 3 kafka + 1 worker)"
+          elif [ "$NODE_COUNT" -ge 4 ]; then
+            echo "⚠️ K3s cluster has $NODE_COUNT nodes - expected 5 for full deployment"
+            echo "   This may be intentional (worker_node_count=0)"
           elif [ "$NODE_COUNT" -ge 2 ]; then
-            echo "⚠️ K3s cluster has $NODE_COUNT nodes - expected 4+ for HA Kafka"
-            echo "   This may be intentional for testing environments"
+            echo "⚠️ K3s cluster has $NODE_COUNT nodes - minimal setup"
           else
             echo "❌ Expected at least 2 nodes, found $NODE_COUNT"
             exit 1
@@ -116,8 +118,15 @@ jobs:
           echo "Labeling Kafka nodes for workload placement..."
           for node in $(kubectl get nodes -o name | grep kafka); do
             NODE_NAME=$(echo $node | cut -d'/' -f2)
-            kubectl label node "$NODE_NAME" workload=kafka --overwrite
-            echo "✅ Labeled $NODE_NAME with workload=kafka"
+            kubectl label node "$NODE_NAME" workload=mixed --overwrite
+            echo "✅ Labeled $NODE_NAME with workload=mixed"
+          done
+          echo ""
+          echo "Labeling Worker nodes for app workloads..."
+          for node in $(kubectl get nodes -o name | grep worker); do
+            NODE_NAME=$(echo $node | cut -d'/' -f2)
+            kubectl label node "$NODE_NAME" workload=apps --overwrite
+            echo "✅ Labeled $NODE_NAME with workload=apps"
           done
           echo ""
           echo "Node labels:"

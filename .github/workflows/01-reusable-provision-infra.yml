@@ -14,6 +14,9 @@ on:
       kafka_ip:
         description: "Kafka Node IP"
         value: ${{ jobs.provision.outputs.kafka_ip }}
+      worker_count:
+        description: "Number of Worker Nodes"
+        value: ${{ jobs.provision.outputs.worker_count }}
 
 env:
   TF_VERSION: '1.13.4'
@@ -25,6 +28,7 @@ jobs:
     outputs:
       control_plane_ip: ${{ steps.tf_output.outputs.control_ip }}
       kafka_ip: ${{ steps.tf_output.outputs.kafka_ip }}
+      worker_count: ${{ steps.tf_output.outputs.worker_count }}
 
     steps:
       - name: Checkout Infra Repository
@@ -96,10 +100,15 @@ jobs:
           # Get all private IPs for internal token distribution
           KAFKA_PRIVATE_IPS=$(terraform output -json kafka_server_private_ips | jq -c '.')
           KAFKA_COUNT=$(terraform output -json kafka_server_private_ips | jq -r '. | length')
+          # Get worker node info
+          WORKER_PRIVATE_IPS=$(terraform output -json worker_server_private_ips | jq -c '.')
+          WORKER_COUNT=$(terraform output -json worker_server_private_ips | jq -r '. | length')
           echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
           echo "kafka_ip=$KAFKA_IP" >> $GITHUB_OUTPUT
           echo "kafka_private_ips=$KAFKA_PRIVATE_IPS" >> $GITHUB_OUTPUT
           echo "kafka_count=$KAFKA_COUNT" >> $GITHUB_OUTPUT
+          echo "worker_private_ips=$WORKER_PRIVATE_IPS" >> $GITHUB_OUTPUT
+          echo "worker_count=$WORKER_COUNT" >> $GITHUB_OUTPUT
 
       - name: Verify SSH and Cloud-init
         run: |
@@ -293,6 +302,65 @@ jobs:
             echo "✅ All $TOTAL_KAFKA Kafka nodes joined the cluster"
           else
             echo "Single Kafka node deployment - no additional nodes to process"
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 8: Distributing Token to Worker Nodes via Jump Host"
+          echo "=========================================="
+          WORKER_PRIVATE_IPS='${{ steps.tf_output.outputs.worker_private_ips }}'
+          TOTAL_WORKERS=${{ steps.tf_output.outputs.worker_count }}
+          
+          if [ "$TOTAL_WORKERS" -gt 0 ]; then
+            echo "Total Worker nodes: $TOTAL_WORKERS"
+            
+            for idx in $(seq 0 $((TOTAL_WORKERS-1))); do
+              PRIVATE_IP=$(echo "$WORKER_PRIVATE_IPS" | jq -r ".[$idx]")
+              echo ""
+              echo "--- Processing worker-$idx ($PRIVATE_IP) ---"
+              
+              echo "Waiting for SSH on worker-$idx (via control plane)..."
+              for j in {1..30}; do
+                if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$PRIVATE_IP 'echo SSH ready'" 2>/dev/null; then
+                  echo "✅ SSH accessible on worker-$idx (attempt $j)"
+                  break
+                fi
+                echo "⏳ Attempt $j/30..."
+                sleep 10
+                if [ $j -eq 30 ]; then
+                  echo "❌ Cannot reach worker-$idx via jump host after 5 minutes"
+                  exit 1
+                fi
+              done
+              
+              echo "Distributing token to worker-$idx..."
+              if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no root@$PRIVATE_IP \"echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token\""; then
+                echo "✅ Token distributed to worker-$idx"
+              else
+                echo "❌ Failed to distribute token to worker-$idx"
+                exit 1
+              fi
+              
+              echo "Waiting for worker-$idx to join cluster..."
+              for j in {1..30}; do
+                if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no root@$PRIVATE_IP 'test -f /root/k3s-agent-ready.txt'" 2>/dev/null; then
+                  echo "✅ worker-$idx joined cluster (attempt $j)"
+                  break
+                fi
+                echo "⏳ Attempt $j/30..."
+                sleep 5
+                if [ $j -eq 30 ]; then
+                  echo "❌ worker-$idx agent not ready after 5 minutes"
+                  ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no root@$PRIVATE_IP 'tail -50 /var/log/cloud-init-output.log'" || true
+                  exit 1
+                fi
+              done
+            done
+            
+            echo ""
+            echo "✅ All $TOTAL_WORKERS Worker nodes joined the cluster"
+          else
+            echo "No worker nodes configured - skipping"
           fi
           
           echo ""
