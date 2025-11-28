@@ -1,4 +1,4 @@
-name: 'Reusable: Deploy Strimzi'
+name: '04 Reusable: Deploy Strimzi'
 
 on:
   workflow_call:

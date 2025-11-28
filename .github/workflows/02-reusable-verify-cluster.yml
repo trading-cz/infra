@@ -1,4 +1,4 @@
-name: 'Reusable: Verify K3s Cluster'
+name: '02 Reusable: Verify K3s Cluster'
 
 on:
   workflow_call:

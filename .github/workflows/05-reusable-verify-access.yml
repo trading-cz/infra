@@ -1,4 +1,4 @@
-name: 'Reusable: Verify External Access'
+name: '05 Reusable: Verify External Access'
 
 on:
   workflow_call:
