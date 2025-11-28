@@ -3,6 +3,10 @@ name: '03 Reusable: Deploy ArgoCD'
 on:
   workflow_call:
     inputs:
+      environment:
+        description: 'Environment to deploy (dev or prod)'
+        required: true
+        type: string
       control_plane_ip:
         description: 'Control Plane IP'
         required: true
@@ -85,9 +89,9 @@ jobs:
           KAFKA_IP="${{ inputs.kafka_public_ip }}"
           sed -i "s/advertisedHost: .*/advertisedHost: $KAFKA_IP/" config/base/kafka/kafka.yaml
           
-          echo "🌱 Bootstrapping ArgoCD from Config Repo..."
-          # Apply the minimal overlay which contains the ArgoCD CR
-          kubectl apply -k config/overlays/minimal
+          echo "🌱 Bootstrapping ArgoCD from Config Repo (${{ inputs.environment }})..."
+          # Apply the environment-specific overlay which contains the ArgoCD CR
+          kubectl apply -k config/overlays/${{ inputs.environment }}
 
       - name: Verify ArgoCD Instance
         run: |

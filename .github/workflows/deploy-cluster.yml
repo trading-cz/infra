@@ -49,6 +49,7 @@ jobs:
     if: needs.provision.result == 'success'
     uses: trading-cz/infra/.github/workflows/03-reusable-deploy-argocd.yml@main
     with:
+      environment: ${{ inputs.environment }}
       control_plane_ip: ${{ needs.provision.outputs.control_plane_ip }}
       kafka_public_ip: ${{ needs.provision.outputs.kafka_ip }}
     secrets:
