@@ -59,23 +59,84 @@ jobs:
 
       - name: Create or Get Primary IPs
         id: primary_ips
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
-          export HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+          set -euo pipefail
           ENV="${{ inputs.environment }}"
           CLUSTER="k3s-trading"
+          
+          echo "========================================="
+          echo "  Primary IP Management"
+          echo "========================================="
+          echo "Environment: $ENV"
+          echo "Cluster: $CLUSTER"
+          echo ""
+          
+          # List existing Primary IPs
+          echo "📋 Current Primary IPs in account:"
+          hcloud primary-ip list -o columns=id,name,ip,assignee_id || echo "  (none)"
+          echo ""
+          
+          # --- Control Plane Primary IP ---
           CONTROL_IP_NAME="${ENV}-${CLUSTER}-control-ip"
-          CONTROL_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$CONTROL_IP_NAME" | awk '{print $1}')
+          echo "🔍 Looking for Control Plane Primary IP: $CONTROL_IP_NAME"
+          
+          CONTROL_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$CONTROL_IP_NAME" | awk '{print $1}' || true)
+          
           if [ -z "$CONTROL_IP_ID" ]; then
-            CONTROL_IP_ID=$(hcloud primary-ip create --type ipv4 --name "$CONTROL_IP_NAME" --datacenter nbg1-dc3 --label environment=$ENV --label cluster=$CLUSTER --label role=control-plane -o json | jq -r '.primary_ip.id')
+            echo "⚠️  Not found. Creating new Primary IP..."
+            CREATE_OUTPUT=$(hcloud primary-ip create --type ipv4 --name "$CONTROL_IP_NAME" --datacenter nbg1-dc3 \
+              --label environment="$ENV" --label cluster="$CLUSTER" --label role=control-plane -o json 2>&1)
+            echo "API Response: $CREATE_OUTPUT"
+            CONTROL_IP_ID=$(echo "$CREATE_OUTPUT" | jq -r '.primary_ip.id // empty')
+            if [ -z "$CONTROL_IP_ID" ]; then
+              echo "❌ ERROR: Failed to create Control Plane Primary IP!"
+              echo "Response was: $CREATE_OUTPUT"
+              exit 1
+            fi
+            CONTROL_IP_ADDR=$(echo "$CREATE_OUTPUT" | jq -r '.primary_ip.ip')
+            echo "✅ Created Control Plane Primary IP: ID=$CONTROL_IP_ID, IP=$CONTROL_IP_ADDR"
+          else
+            CONTROL_IP_ADDR=$(hcloud primary-ip describe "$CONTROL_IP_ID" -o format='{{.IP}}')
+            echo "✅ Found existing Control Plane Primary IP: ID=$CONTROL_IP_ID, IP=$CONTROL_IP_ADDR"
           fi
           echo "control_plane_primary_ip_id=$CONTROL_IP_ID" >> $GITHUB_OUTPUT
           
+          echo ""
+          
+          # --- Kafka Primary IP ---
           KAFKA_IP_NAME="${ENV}-${CLUSTER}-kafka-ip"
-          KAFKA_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$KAFKA_IP_NAME" | awk '{print $1}')
+          echo "🔍 Looking for Kafka Primary IP: $KAFKA_IP_NAME"
+          
+          KAFKA_IP_ID=$(hcloud primary-ip list -o noheader -o columns=id,name | grep "$KAFKA_IP_NAME" | awk '{print $1}' || true)
+          
           if [ -z "$KAFKA_IP_ID" ]; then
-            KAFKA_IP_ID=$(hcloud primary-ip create --type ipv4 --name "$KAFKA_IP_NAME" --datacenter nbg1-dc3 --label environment=$ENV --label cluster=$CLUSTER --label role=kafka -o json | jq -r '.primary_ip.id')
+            echo "⚠️  Not found. Creating new Primary IP..."
+            CREATE_OUTPUT=$(hcloud primary-ip create --type ipv4 --name "$KAFKA_IP_NAME" --datacenter nbg1-dc3 \
+              --label environment="$ENV" --label cluster="$CLUSTER" --label role=kafka -o json 2>&1)
+            echo "API Response: $CREATE_OUTPUT"
+            KAFKA_IP_ID=$(echo "$CREATE_OUTPUT" | jq -r '.primary_ip.id // empty')
+            if [ -z "$KAFKA_IP_ID" ]; then
+              echo "❌ ERROR: Failed to create Kafka Primary IP!"
+              echo "Response was: $CREATE_OUTPUT"
+              exit 1
+            fi
+            KAFKA_IP_ADDR=$(echo "$CREATE_OUTPUT" | jq -r '.primary_ip.ip')
+            echo "✅ Created Kafka Primary IP: ID=$KAFKA_IP_ID, IP=$KAFKA_IP_ADDR"
+          else
+            KAFKA_IP_ADDR=$(hcloud primary-ip describe "$KAFKA_IP_ID" -o format='{{.IP}}')
+            echo "✅ Found existing Kafka Primary IP: ID=$KAFKA_IP_ID, IP=$KAFKA_IP_ADDR"
           fi
           echo "kafka_primary_ip_id=$KAFKA_IP_ID" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "========================================="
+          echo "  Primary IP Summary"
+          echo "========================================="
+          echo "Control Plane: ID=$CONTROL_IP_ID, IP=$CONTROL_IP_ADDR"
+          echo "Kafka:         ID=$KAFKA_IP_ID, IP=$KAFKA_IP_ADDR"
+          echo "========================================="
 
       - name: Terraform Init
         working-directory: infra

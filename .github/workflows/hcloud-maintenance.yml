@@ -82,6 +82,37 @@ jobs:
             echo "✅ No Kafka servers found (Clean)."
           fi
           
+          echo ""
+          echo "========================================="
+          echo "  Primary IPs Status (Persistent IPs)"
+          echo "========================================="
+          CONTROL_IP_NAME="${ENV}-${CLUSTER}-control-ip"
+          KAFKA_IP_NAME="${ENV}-${CLUSTER}-kafka-ip"
+          
+          echo "Looking for: $CONTROL_IP_NAME, $KAFKA_IP_NAME"
+          echo ""
+          echo "All Primary IPs in account:"
+          hcloud primary-ip list -o columns=id,name,ip,type,assignee_id || echo "  (none found)"
+          echo ""
+          
+          # Check control-plane Primary IP
+          if hcloud primary-ip list -o noheader -o columns=name | grep -q "$CONTROL_IP_NAME"; then
+            CONTROL_IP=$(hcloud primary-ip list -o noheader -o columns=name,ip | grep "$CONTROL_IP_NAME" | awk '{print $2}')
+            echo "✅ Control Plane Primary IP exists: $CONTROL_IP"
+          else
+            echo "⚠️  Control Plane Primary IP '$CONTROL_IP_NAME' NOT FOUND (will be created during provisioning)"
+          fi
+          
+          # Check kafka Primary IP
+          if hcloud primary-ip list -o noheader -o columns=name | grep -q "$KAFKA_IP_NAME"; then
+            KAFKA_IP=$(hcloud primary-ip list -o noheader -o columns=name,ip | grep "$KAFKA_IP_NAME" | awk '{print $2}')
+            echo "✅ Kafka Primary IP exists: $KAFKA_IP"
+          else
+            echo "⚠️  Kafka Primary IP '$KAFKA_IP_NAME' NOT FOUND (will be created during provisioning)"
+          fi
+          echo "========================================="
+          
+          echo ""
           echo "✨ Environment appears clean. Ready for provisioning."
 
       # ---------- LIST ----------
