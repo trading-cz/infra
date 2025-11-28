@@ -40,8 +40,13 @@ output "k3s_control_server_id" {
 # Kafka Server Outputs
 # ============================================
 
+output "kafka_0_public_ip" {
+  description = "Public IPv4 address of kafka-0 (external access via NodePort)"
+  value       = length(module.kafka_server) > 0 ? module.kafka_server[0].ipv4_address : null
+}
+
 output "kafka_server_public_ips" {
-  description = "Public IPv4 addresses of Kafka servers"
+  description = "Public IPv4 addresses of Kafka servers (only kafka-0 has public IP)"
   value       = [for server in module.kafka_server : server.ipv4_address]
 }
 

@@ -27,8 +27,10 @@ resource "hcloud_server" "kafka" {
   firewall_ids = var.firewall_ids
 
   public_net {
-    ipv4_enabled = true
-    ipv6_enabled = true
+    # Only enable public IP for nodes with Primary IP assigned (kafka-0)
+    # kafka-1, kafka-2, etc. are internal-only (no public IP)
+    ipv4_enabled = var.primary_ipv4_id != null
+    ipv6_enabled = false
     ipv4         = var.primary_ipv4_id # Attach persistent Primary IP (only for kafka-0)
   }
 

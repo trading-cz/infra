@@ -17,7 +17,7 @@ datacenter   = "nbg1-dc3" # Required for Primary IPs
 # ============================================
 control_plane_server_type = "cx23" # 2 vCPU, 4GB RAM - minimum for K3s
 kafka_server_type         = "cx23" # 2 vCPU, 4GB RAM - budget option
-kafka_node_count          = 1      # Single node for dev testing
+kafka_node_count          = 3      # 3 nodes for KRaft quorum (matching prod)
 
 # ============================================
 # Network Configuration
