@@ -213,7 +213,28 @@ Pipeline:
 | `SSH_PUBLIC_KEY` | ED25519 public key for server access |
 | `SSH_PRIVATE_KEY` | ED25519 private key for workflows |
 | `TOKEN_GIT_REPO_CONFIG` | PAT for ArgoCD to access `config` repo |
+| `GHCR_TOKEN` | GitHub PAT with `read:packages` scope for pulling private container images |
 | `ARGOCD_ADMIN_PASSWORD` | (Optional) ArgoCD admin password |
+
+### GHCR_TOKEN Setup
+
+The `GHCR_TOKEN` is required for K3s nodes to pull private container images from GitHub Container Registry (ghcr.io).
+
+**Why it's needed**:
+- Container images in `ghcr.io/trading-cz/*` are private by default
+- K3s nodes (external VMs) cannot authenticate to GHCR without credentials
+- Even with "Internal" visibility, external servers need a token
+
+**Create the token**:
+1. Go to https://github.com/settings/tokens/new (Classic token)
+2. Note: `GHCR_TOKEN`
+3. Select scope: ✅ `read:packages` - Download packages from GitHub Package Registry
+4. Generate and copy the token
+5. Add to repository secrets: Settings → Secrets → Actions → `GHCR_TOKEN`
+
+**How it works**:
+- Workflow creates a `docker-registry` secret named `ghcr-secret` in each app namespace
+- Deployments reference this secret via `imagePullSecrets: [{name: ghcr-secret}]`
 
 ## Access Endpoints
 
