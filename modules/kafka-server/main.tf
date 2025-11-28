@@ -27,11 +27,12 @@ resource "hcloud_server" "kafka" {
   firewall_ids = var.firewall_ids
 
   public_net {
-    # Only enable public IP for nodes with Primary IP assigned (kafka-0)
-    # kafka-1, kafka-2, etc. are internal-only (no public IP)
-    ipv4_enabled = var.primary_ipv4_id != null
+    # All nodes need public IP for internet access during cloud-init (K3s download)
+    # kafka-0 gets the persistent Primary IP for external Kafka access
+    # kafka-1, kafka-2, etc. get ephemeral public IPs (change on recreate, but that's OK)
+    ipv4_enabled = true
     ipv6_enabled = false
-    ipv4         = var.primary_ipv4_id # Attach persistent Primary IP (only for kafka-0)
+    ipv4         = var.primary_ipv4_id # Attach persistent Primary IP (only for kafka-0, null for others)
   }
 
   labels = var.labels

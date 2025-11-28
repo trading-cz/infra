@@ -25,28 +25,28 @@ Deploy cost-optimized Kubernetes infrastructure for algorithmic trading:
 │                         Hetzner Cloud (nbg1)                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  k3s-control (cx23)                                                         │
-│  ├─ Primary IP #1 (Public)        Private: 10.0.1.10                        │
+│  ├─ Primary IP #1 (Persistent)    Private: 10.0.1.10                        │
 │  ├─ K3s server (control plane)                                              │
 │  ├─ Traefik Ingress (30080/30443)                                           │
 │  ├─ ArgoCD Operator                                                         │
 │  └─ Strimzi Operator                                                        │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  kafka-0 (cx23)          │  kafka-1 (cx23)       │  kafka-2 (cx23)          │
-│  ├─ Primary IP #2        │  ├─ NO Public IP      │  ├─ NO Public IP         │
+│  ├─ Primary IP #2        │  ├─ Ephemeral IP      │  ├─ Ephemeral IP         │
 │  ├─ Private: 10.0.1.20   │  ├─ Private: .21      │  ├─ Private: .22         │
 │  ├─ K3s agent            │  ├─ K3s agent         │  ├─ K3s agent            │
-│  ├─ NodePort: 30002      │  └─ Internal only     │  └─ Internal only        │
+│  ├─ NodePort: 30002      │  └─ Internal Kafka    │  └─ Internal Kafka       │
 │  └─ External Kafka       │                       │                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  Private Network: 10.0.1.0/24                                               │
 │  All nodes communicate internally via private IPs                           │
-│  Only kafka-0 is accessible from internet (external Kafka access)           │
+│  kafka-0 has persistent IP for external access, kafka-1/2 have ephemeral IPs│
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **External Access**:
 - **ArgoCD**: `https://<control-plane-ip>:30443`
-- **Kafka**: `<kafka-0-ip>:30002` (NodePort, only broker 0 externally accessible)
+- **Kafka**: `<kafka-0-ip>:30002` (NodePort, only broker 0 externally accessible via persistent IP)
 
 **Internal Access** (from pods):
 - **Kafka Bootstrap**: `trading-cluster-kafka-bootstrap.kafka:9092`
@@ -199,9 +199,9 @@ C:\projects\apps\terraform_1.13.4\terraform.exe plan -var-file="environments/dev
 ### Current Architecture
 
 The infrastructure supports a 3-node Kafka cluster with KRaft (no ZooKeeper):
-- **kafka-0**: Public IP (Primary IP #2) + Private IP (10.0.1.20) - external access via NodePort 30002
-- **kafka-1**: Internal only - Private IP (10.0.1.21)
-- **kafka-2**: Internal only - Private IP (10.0.1.22)
+- **kafka-0**: Primary IP #2 (persistent) + Private IP (10.0.1.20) - external access via NodePort 30002
+- **kafka-1**: Ephemeral public IP + Private IP (10.0.1.21) - internal Kafka only
+- **kafka-2**: Ephemeral public IP + Private IP (10.0.1.22) - internal Kafka only
 
 ### How to Change Kafka Node Count
 
@@ -236,23 +236,23 @@ spec:
 **Step 3: Deploy via GitHub Actions**
 
 Run the "Deploy K3s Cluster" workflow. The workflow will:
-1. Create VMs (only kafka-0 gets public IP)
-2. Distribute K3s tokens via jump host to internal nodes
+1. Create VMs (kafka-0 gets persistent Primary IP, others get ephemeral IPs)
+2. Distribute K3s tokens (kafka-0 direct, others via jump host)
 3. All nodes join the cluster with `workload=kafka` label
 
 ### IP Address Allocation
 
 | Node | Public IP | Private IP | Access |
 |------|-----------|------------|--------|
-| kafka-0 | Primary IP #2 | 10.0.1.20 | External (NodePort 30002) + Internal |
-| kafka-1 | None | 10.0.1.21 | Internal only |
-| kafka-2 | None | 10.0.1.22 | Internal only |
-| kafka-3 | None | 10.0.1.23 | Internal only (if added) |
-| ... | None | 10.0.1.2X | Internal only |
+| kafka-0 | Primary IP #2 (persistent) | 10.0.1.20 | External (NodePort 30002) + Internal |
+| kafka-1 | Ephemeral (changes on recreate) | 10.0.1.21 | Internal only (Kafka replication) |
+| kafka-2 | Ephemeral (changes on recreate) | 10.0.1.22 | Internal only (Kafka replication) |
+| kafka-N | Ephemeral | 10.0.1.2N | Internal only |
 
 ### Important Constraints
 
-1. **Only 2 Primary IPs available**: One for ArgoCD (control plane), one for Kafka (kafka-0)
-2. **Additional nodes have no public IP**: Access via control plane as jump host
-3. **KRaft minimum**: 3 nodes for quorum (can survive 1 node failure)
-4. **IP range limit**: 10.0.1.20-29 (10 Kafka nodes maximum)
+1. **Only 2 Primary IPs**: One for ArgoCD (control plane), one for Kafka external (kafka-0)
+2. **All nodes have public IPs**: Required for cloud-init (K3s download from internet)
+3. **kafka-1, kafka-2 IPs are ephemeral**: Change on VM recreate, but that's OK (internal only)
+4. **KRaft minimum**: 3 nodes for quorum (can survive 1 node failure)
+5. **IP range limit**: 10.0.1.20-29 (10 Kafka nodes maximum)
