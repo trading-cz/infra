@@ -178,6 +178,9 @@ jobs:
           echo "Kafka CR Status:"
           kubectl get kafka -n kafka -o yaml || echo "Kafka CR not found"
           echo "---------------------------------------------------"
+          echo "Kafka Pods (3 brokers expected for KRaft quorum):"
+          kubectl get pods -n kafka -o wide
+          echo "---------------------------------------------------"
           echo "Kafka Broker Logs (Startup & Listeners):"
           kubectl logs -n kafka -l strimzi.io/name=trading-cluster-dual-role --tail=100
           echo "---------------------------------------------------"
@@ -186,4 +189,12 @@ jobs:
           echo "---------------------------------------------------"
           echo "Kafka Namespace Events:"
           kubectl get events -n kafka --sort-by='.lastTimestamp'
+          echo "::endgroup::"
+          
+          echo "::group::6. Kafka Node Status (All 3 Kafka K3s Nodes)"
+          echo "Kafka nodes in cluster:"
+          kubectl get nodes -l workload=kafka -o wide
+          echo "---------------------------------------------------"
+          echo "Node conditions:"
+          kubectl describe nodes -l workload=kafka | grep -A5 "Conditions:" || true
           echo "::endgroup::"

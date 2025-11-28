@@ -48,8 +48,13 @@ jobs:
         run: |
           kubectl get nodes
           NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
-          if [ "$NODE_COUNT" -ge 2 ]; then
-            echo "✅ K3s cluster operational with $NODE_COUNT nodes"
+          # Expect 1 control plane + kafka_node_count (3 for KRaft quorum)
+          # Minimum is 4 nodes (1 control + 3 kafka) for production/dev with HA
+          if [ "$NODE_COUNT" -ge 4 ]; then
+            echo "✅ K3s cluster operational with $NODE_COUNT nodes (1 control + $((NODE_COUNT-1)) kafka)"
+          elif [ "$NODE_COUNT" -ge 2 ]; then
+            echo "⚠️ K3s cluster has $NODE_COUNT nodes - expected 4+ for HA Kafka"
+            echo "   This may be intentional for testing environments"
           else
             echo "❌ Expected at least 2 nodes, found $NODE_COUNT"
             exit 1

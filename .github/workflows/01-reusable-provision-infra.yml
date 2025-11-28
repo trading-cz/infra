@@ -91,14 +91,21 @@ jobs:
         working-directory: infra
         run: |
           CONTROL_IP=$(terraform output -raw k3s_control_public_ip)
+          # kafka-0 is the only node with public IP (for external access)
           KAFKA_IP=$(terraform output -json kafka_server_public_ips | jq -r '.[0]')
+          # Get all private IPs for internal token distribution
+          KAFKA_PRIVATE_IPS=$(terraform output -json kafka_server_private_ips | jq -c '.')
+          KAFKA_COUNT=$(terraform output -json kafka_server_private_ips | jq -r '. | length')
           echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
           echo "kafka_ip=$KAFKA_IP" >> $GITHUB_OUTPUT
+          echo "kafka_private_ips=$KAFKA_PRIVATE_IPS" >> $GITHUB_OUTPUT
+          echo "kafka_count=$KAFKA_COUNT" >> $GITHUB_OUTPUT
 
       - name: Verify SSH and Cloud-init
         run: |
           CONTROL_IP=${{ steps.tf_output.outputs.control_ip }}
           KAFKA_IP=${{ steps.tf_output.outputs.kafka_ip }}
+          KAFKA_COUNT=${{ steps.tf_output.outputs.kafka_count }}
           
           echo "=========================================="
           echo "Step 1: Waiting for SSH on Control Plane ($CONTROL_IP)"
@@ -118,17 +125,17 @@ jobs:
           
           echo ""
           echo "=========================================="
-          echo "Step 2: Waiting for SSH on Kafka Node ($KAFKA_IP)"
+          echo "Step 2: Waiting for SSH on Kafka-0 ($KAFKA_IP)"
           echo "=========================================="
           for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$KAFKA_IP "echo 'SSH ready'" 2>/dev/null; then
-              echo "✅ SSH accessible on kafka node (attempt $i)"
+              echo "✅ SSH accessible on kafka-0 (attempt $i)"
               break
             fi
             echo "⏳ Attempt $i/30 failed, retrying in 10s..."
             sleep 10
             if [ $i -eq 30 ]; then
-              echo "❌ SSH not accessible on kafka node after 5 minutes"
+              echo "❌ SSH not accessible on kafka-0 after 5 minutes"
               exit 1
             fi
           done
@@ -179,23 +186,23 @@ jobs:
           
           echo ""
           echo "=========================================="
-          echo "Step 5: Distributing K3s Token to Kafka Node"
+          echo "Step 5: Distributing K3s Token to Kafka-0 (Public IP)"
           echo "=========================================="
           if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token"; then
-            echo "✅ Token distributed to kafka node"
+            echo "✅ Token distributed to kafka-0"
           else
-            echo "❌ Failed to distribute token"
+            echo "❌ Failed to distribute token to kafka-0"
             exit 1
           fi
           
           echo ""
           echo "=========================================="
-          echo "Step 6: Waiting for Kafka Node to Join Cluster"
+          echo "Step 6: Waiting for Kafka-0 to Join Cluster"
           echo "Checking for: /root/k3s-agent-ready.txt"
           echo "=========================================="
           for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "test -f /root/k3s-agent-ready.txt" 2>/dev/null; then
-              echo "✅ Kafka node joined cluster (attempt $i)"
+              echo "✅ Kafka-0 joined cluster (attempt $i)"
               echo ""
               echo "Cloud-init log (last 30 lines):"
               ssh -o StrictHostKeyChecking=no root@$KAFKA_IP "tail -30 /var/log/cloud-init-output.log" || true
@@ -203,7 +210,7 @@ jobs:
             fi
             echo "⏳ Attempt $i/30 - Agent not ready yet, retrying in 5s..."
             if [ $i -eq 30 ]; then
-              echo "❌ Kafka node agent not ready after 5 minutes"
+              echo "❌ Kafka-0 agent not ready after 5 minutes"
               echo ""
               echo "📋 Debugging Information:"
               echo "Cloud-init status:"
@@ -221,6 +228,72 @@ jobs:
             fi
             sleep 5
           done
+          
+          echo ""
+          echo "=========================================="
+          echo "Step 7: Distributing Token to Additional Kafka Nodes via Jump Host"
+          echo "=========================================="
+          # kafka-1, kafka-2, etc. have no public IP - access via control plane
+          KAFKA_PRIVATE_IPS='${{ steps.tf_output.outputs.kafka_private_ips }}'
+          TOTAL_KAFKA=$KAFKA_COUNT
+          
+          if [ "$TOTAL_KAFKA" -gt 1 ]; then
+            echo "Total Kafka nodes: $TOTAL_KAFKA (kafka-0 already done, processing kafka-1 through kafka-$((TOTAL_KAFKA-1)))"
+            
+            # Copy SSH key to control plane for jump host access
+            echo "Setting up SSH key on control plane for internal access..."
+            scp -o StrictHostKeyChecking=no ~/.ssh/id_ed25519 root@$CONTROL_IP:/root/.ssh/id_ed25519
+            ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "chmod 600 /root/.ssh/id_ed25519"
+            
+            # Process each additional kafka node (skip index 0)
+            for idx in $(seq 1 $((TOTAL_KAFKA-1))); do
+              PRIVATE_IP=$(echo "$KAFKA_PRIVATE_IPS" | jq -r ".[$idx]")
+              echo ""
+              echo "--- Processing kafka-$idx ($PRIVATE_IP) ---"
+              
+              echo "Waiting for SSH on kafka-$idx (via control plane)..."
+              for j in {1..30}; do
+                if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$PRIVATE_IP 'echo SSH ready'" 2>/dev/null; then
+                  echo "✅ SSH accessible on kafka-$idx (attempt $j)"
+                  break
+                fi
+                echo "⏳ Attempt $j/30..."
+                sleep 10
+                if [ $j -eq 30 ]; then
+                  echo "❌ Cannot reach kafka-$idx via jump host after 5 minutes"
+                  exit 1
+                fi
+              done
+              
+              echo "Distributing token to kafka-$idx..."
+              if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no root@$PRIVATE_IP \"echo '$K3S_TOKEN' > /tmp/k3s-token && chmod 600 /tmp/k3s-token\""; then
+                echo "✅ Token distributed to kafka-$idx"
+              else
+                echo "❌ Failed to distribute token to kafka-$idx"
+                exit 1
+              fi
+              
+              echo "Waiting for kafka-$idx to join cluster..."
+              for j in {1..30}; do
+                if ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no root@$PRIVATE_IP 'test -f /root/k3s-agent-ready.txt'" 2>/dev/null; then
+                  echo "✅ kafka-$idx joined cluster (attempt $j)"
+                  break
+                fi
+                echo "⏳ Attempt $j/30..."
+                sleep 5
+                if [ $j -eq 30 ]; then
+                  echo "❌ kafka-$idx agent not ready after 5 minutes"
+                  ssh -o StrictHostKeyChecking=no root@$CONTROL_IP "ssh -o StrictHostKeyChecking=no root@$PRIVATE_IP 'tail -50 /var/log/cloud-init-output.log'" || true
+                  exit 1
+                fi
+              done
+            done
+            
+            echo ""
+            echo "✅ All $TOTAL_KAFKA Kafka nodes joined the cluster"
+          else
+            echo "Single Kafka node deployment - no additional nodes to process"
+          fi
           
           echo ""
           echo "=========================================="
