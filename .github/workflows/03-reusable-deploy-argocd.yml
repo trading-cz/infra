@@ -22,6 +22,9 @@ on:
       token_git_repo_config:
         description: 'Token for config repo access'
         required: true
+      ghcr_token:
+        description: 'GitHub Container Registry token for pulling private images'
+        required: true
       argocd_admin_password:
         description: 'Admin password for ArgoCD'
         required: false
@@ -82,6 +85,15 @@ jobs:
         run: |
           echo "🚀 Creating ArgoCD Namespace..."
           kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "🔐 Creating GHCR pull secret for ingestion-alpaca namespace..."
+          kubectl create namespace ingestion-alpaca --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry ghcr-secret \
+            --namespace=ingestion-alpaca \
+            --docker-server=ghcr.io \
+            --docker-username=trading-cz \
+            --docker-password=${{ secrets.ghcr_token }} \
+            --dry-run=client -o yaml | kubectl apply -f -
 
           echo "🔧 Patching Kafka Config with Public IP..."
           # We need to inject the real Public IP into the Kafka CR before applying it
