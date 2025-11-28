@@ -20,6 +20,12 @@ kafka_server_type         = "cx23" # 2 vCPU, 4GB RAM - budget option
 kafka_node_count          = 3      # 3 nodes for KRaft quorum (matching prod)
 
 # ============================================
+# Worker Node Configuration (Python Apps)
+# ============================================
+worker_server_type = "cx22" # 2 vCPU, 4GB RAM - cheapest option
+worker_node_count  = 1      # 1 dedicated worker for apps
+
+# ============================================
 # Network Configuration
 # ============================================
 network_cidr             = "10.0.0.0/16"
