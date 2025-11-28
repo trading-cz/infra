@@ -1,4 +1,4 @@
-name: 'Reusable: Provision Infrastructure'
+name: '01 Reusable: Provision Infrastructure'
 
 on:
   workflow_call:

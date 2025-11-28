@@ -66,20 +66,9 @@ jobs:
     secrets:
       ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-  diagnostics_on_failure:
-    name: Run Diagnostics on Failure
-    needs: [provision, verify_cluster, deploy_argocd, deploy_strimzi, verify_access]
-    if: failure()
-    uses: trading-cz/infra/.github/workflows/debug-cluster.yml@main
-    with:
-      environment: ${{ inputs.environment }}
-    secrets:
-      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-
   cleanup_on_failure:
     name: Auto-Cleanup on Failure
-    needs: [diagnostics_on_failure]
+    needs: [provision, verify_cluster, deploy_argocd, deploy_strimzi, verify_access]
     if: failure()
     uses: trading-cz/infra/.github/workflows/hcloud-maintenance.yml@main
     with:
@@ -90,7 +79,7 @@ jobs:
 
   summary:
     name: Deployment Summary
-    needs: [provision, verify_clean, verify_cluster, deploy_argocd, deploy_strimzi, verify_access, cleanup_on_failure, diagnostics_on_failure]
+    needs: [provision, verify_clean, verify_cluster, deploy_argocd, deploy_strimzi, verify_access, cleanup_on_failure]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -111,7 +100,6 @@ jobs:
           echo "Deploy ArgoCD:   ${{ needs.deploy_argocd.result }}"
           echo "Deploy Strimzi:  ${{ needs.deploy_strimzi.result }}"
           echo "Verify Access:   ${{ needs.verify_access.result }}"
-          echo "Diagnostics:     ${{ needs.diagnostics_on_failure.result }}"
           echo "Auto Cleanup:    ${{ needs.cleanup_on_failure.result }}"
           echo "========================================"
           if [[ "${{ needs.verify_clean.result }}" != "success" || "${{ needs.provision.result }}" != "success" || "${{ needs.verify_cluster.result }}" != "success" || "${{ needs.deploy_argocd.result }}" != "success" || "${{ needs.deploy_strimzi.result }}" != "success" || "${{ needs.verify_access.result }}" != "success" ]]; then

@@ -1,4 +1,4 @@
-name: 'Reusable: Deploy ArgoCD'
+name: '03 Reusable: Deploy ArgoCD'
 
 on:
   workflow_call:
