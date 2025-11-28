@@ -44,8 +44,8 @@ on:
         default: '100'
 
 jobs:
-  k8s-ops:
-    name: K8s Operations
+  k3s-ops:
+    name: K3s Operations
     runs-on: ubuntu-latest
     
     steps:
@@ -120,7 +120,7 @@ jobs:
         if: ${{ inputs.action == 'list' }}
         run: |
           echo "========================================="
-          echo "  K8s Cluster Overview (${{ inputs.environment }})"
+          echo "  K3s Cluster Overview (${{ inputs.environment }})"
           echo "========================================="
           echo ""
           
@@ -183,10 +183,16 @@ jobs:
           if [ -z "$PODS" ]; then
             echo "❌ No pods found with label '$LABEL' in namespace '$NAMESPACE'"
             echo ""
-            echo "📋 Available pods in namespace '$NAMESPACE':"
-            kubectl get pods -n "$NAMESPACE" -o wide || true
+            echo "📋 Listing all available pods across all namespaces:"
+            echo "─────────────────────────────────────────"
+            kubectl get pods -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,APP_LABEL:.metadata.labels.app,STATUS:.status.phase'
             echo ""
-            echo "💡 Run with action=list to see all available apps"
+            echo "📦 Available namespaces:"
+            echo "─────────────────────────────────────────"
+            kubectl get namespaces
+            echo ""
+            echo "💡 Tip: Use the correct namespace and app label from the list above"
+            echo "   Example: namespace=ingestion-alpaca, app_label=app=ingestion-alpaca"
             exit 1
           fi
           
