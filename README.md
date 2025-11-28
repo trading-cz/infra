@@ -37,6 +37,34 @@ Deploy cost-optimized Kubernetes infrastructure for algorithmic trading:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Private Network IP Allocation
+
+```
+10.0.1.0/24 Subnet Layout
+═══════════════════════════════════════════════════════════════
+Range                │ Purpose              │ Current Use
+═══════════════════════════════════════════════════════════════
+10.0.1.1   - .9      │ Reserved             │ Network/gateway
+───────────────────────────────────────────────────────────────
+10.0.1.10  - .19     │ CONTROL PLANE        │ .10 = k3s-control
+                     │ (K3s servers)        │ .11-.19 = future HA
+───────────────────────────────────────────────────────────────
+10.0.1.20  - .29     │ KAFKA BROKERS        │ .20 = kafka-0 (public)
+                     │                      │ .21 = kafka-1
+                     │                      │ .22 = kafka-2
+───────────────────────────────────────────────────────────────
+10.0.1.30  - .49     │ INFRASTRUCTURE       │ Future: monitoring,
+                     │ SERVICES             │ logging, bastion
+───────────────────────────────────────────────────────────────
+10.0.1.50  - .99     │ EXPANSION            │ Reserved
+───────────────────────────────────────────────────────────────
+10.0.1.100 - .199    │ APPLICATIONS         │ .100 = app-0
+                     │ (100 slots)          │ .101 = app-1, etc.
+───────────────────────────────────────────────────────────────
+10.0.1.200 - .254    │ DHCP / DYNAMIC       │ Not used
+═══════════════════════════════════════════════════════════════
+```
+
 ## Tech Stack
 
 | Component | Version | Notes |
@@ -46,6 +74,16 @@ Deploy cost-optimized Kubernetes infrastructure for algorithmic trading:
 | Kafka | 4.0.0 | Strimzi operator, KRaft (no ZooKeeper) |
 | ArgoCD | v0.15.0-1 | Operator-based deployment |
 | Strimzi | 0.48.0 | Kafka operator |
+
+### Strimzi Upgrade Notes
+
+**Current Version**: 0.48.0 (pinned for stability)
+
+**0.49.0 Assessment** (as of Nov 2025): **Not recommended yet**
+- Introduces breaking `v1` API (requires CR migration)
+- Deprecates OAuth, Keycloak auth, `.spec.kafka.resources`
+- Benefits (Kafka 4.0.1/4.1.1, better deletion handling) not critical for this project
+- Upgrade when: need Kafka 4.1.x, or after 0.50+ proves stable
 
 ## Repository Structure
 
@@ -63,15 +101,20 @@ infra/
 │   ├── k3s-server/         # Control plane + cloud-init (K3s, Helm, Traefik)
 │   ├── kafka-server/       # K3s agent nodes + cloud-init
 │   └── strimzi/            # Strimzi Helm values (reference only)
-└── .github/workflows/
-    ├── deploy-cluster.yml          # Main orchestrator
-    ├── hcloud-maintenance.yml      # List/destroy resources
-    ├── 01-reusable-provision-infra.yml
-    ├── 02-reusable-verify-cluster.yml
-    ├── 03-reusable-deploy-argocd.yml
-    ├── 04-reusable-deploy-strimzi.yml
-    └── 05-reusable-verify-access.yml
+└── .github/
+    ├── workflows/              # GitHub Actions workflow definitions
+    │   ├── deploy-cluster.yml          # Main orchestrator
+    │   ├── hcloud-maintenance.yml      # List/destroy resources
+    │   ├── 01-reusable-provision-infra.yml
+    │   ├── 02-reusable-verify-cluster.yml
+    │   ├── 03-reusable-deploy-argocd.yml
+    │   ├── 04-reusable-deploy-strimzi.yml
+    │   └── 05-reusable-verify-access.yml
+    └── scripts/                # Scripts used by GitHub Actions (if any)
 ```
+
+> **Convention**: All scripts related to GitHub Actions should be stored under `.github/scripts/` 
+> to clearly indicate they are used by CI/CD pipelines and not for local development.
 
 ## GitHub Actions Workflows
 
@@ -131,6 +174,6 @@ C:\projects\apps\terraform_1.13.4\terraform.exe plan -var-file="environments/dev
 1. **Primary IPs over Floating IPs**: Attached during VM creation (no reboot needed)
 2. **Cloud-init for provisioning**: K3s install, agent join, Helm setup in `modules/*/cloud-init.yaml`
 3. **ArgoCD bootstraps from config repo**: `config/overlays/minimal` applied during deploy
-4. **Strimzi latest track**: Uses `https://strimzi.io/install/latest` for operator
+4. **Strimzi pinned version**: Uses `https://strimzi.io/install/0.48.0` (version tracked in `modules/strimzi/VERSION`)
 5. **NodePort services**: ArgoCD (30443), Kafka (30001) - no LoadBalancer needed
 

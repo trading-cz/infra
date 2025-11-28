@@ -279,9 +279,6 @@ jobs:
           echo "Proceeding in 5 seconds..."
           sleep 5
 
-          echo "Proceeding in 5 seconds..."
-          sleep 5
-
           # ------------------------
           # 1) Delete servers first
           # ------------------------

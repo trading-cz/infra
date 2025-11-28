@@ -56,10 +56,15 @@ jobs:
           # This avoids the "Invalid value" error which can happen during updates or SSA
           kubectl delete deployment strimzi-cluster-operator -n kafka --ignore-not-found=true
 
-          echo "📦 Installing Strimzi Operator (Latest)..."
+          # Pinned version for stability (update in modules/strimzi/VERSION when upgrading)
+          STRIMZI_VERSION="0.48.0"
+          echo "📦 Installing Strimzi Operator v${STRIMZI_VERSION}..."
           # Using standard Client-Side Apply (kubectl apply)
           # This is more lenient than Server-Side Apply for this specific manifest
-          kubectl apply -f 'https://strimzi.io/install/latest?namespace=kafka' -n kafka --force
+          # Note: strimzi.io/install/VERSION doesn't work, must use GitHub releases
+          curl -sL "https://github.com/strimzi/strimzi-kafka-operator/releases/download/${STRIMZI_VERSION}/strimzi-cluster-operator-${STRIMZI_VERSION}.yaml" \
+            | sed "s/namespace: myproject/namespace: kafka/g" \
+            | kubectl apply -f - -n kafka --force
 
           echo "⏳ Waiting for Strimzi Cluster Operator to start..."
           # Wait for the deployment to be created before waiting for availability
