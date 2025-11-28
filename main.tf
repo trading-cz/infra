@@ -86,3 +86,27 @@ module "kafka_server" {
     kafka_id    = tostring(count.index)
   }
 }
+
+# Worker Server(s) - For Python applications/strategies
+# No Primary IP needed - ephemeral public IPs are sufficient
+module "worker_server" {
+  source = "./modules/worker-server"
+  count  = var.worker_node_count
+
+  server_name   = "${var.environment}-${var.cluster_name}-worker-${count.index}"
+  server_type   = var.worker_server_type
+  location      = var.location
+  ssh_key_ids   = [hcloud_ssh_key.main.id]
+  network_id    = module.network.network_id
+  subnet_id     = module.network.subnet_id
+  firewall_ids  = [module.network.firewall_id]
+  private_ip    = cidrhost(var.subnet_cidr, 30 + count.index) # 10.0.1.30, 10.0.1.31, etc.
+  k3s_server_ip = var.control_plane_private_ip                # Control plane private IP for K3s agent join
+
+  labels = {
+    environment = var.environment
+    cluster     = var.cluster_name
+    role        = "worker"
+    worker_id   = tostring(count.index)
+  }
+}

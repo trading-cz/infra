@@ -10,7 +10,7 @@ write_files:
       
       K3S_SERVER_IP="${k3s_server_ip}"
       
-      echo "$(date): Starting K3s agent node setup"
+      echo "$(date): Starting K3s worker agent node setup"
       apt-get update -y
       apt-get install -y curl netcat
       
@@ -44,7 +44,7 @@ write_files:
         curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable \
           K3S_URL="https://$K3S_SERVER_IP:6443" \
           K3S_TOKEN="$K3S_TOKEN" \
-          sh -s - --node-label role=kafka --node-label workload=mixed
+          sh -s - --node-label role=worker --node-label workload=apps
         echo "$(date): K3s agent installation completed"
       else
         echo "$(date): ERROR: Failed to retrieve K3s token"
@@ -52,8 +52,6 @@ write_files:
       fi
       
       echo "$(date): Waiting for K3s agent to be ready..."
-      # Note: systemctl is-active may report 'activating' for extended periods
-      # Check process is running instead for reliability
       for i in $(seq 1 60); do
         if pgrep -f "k3s agent" > /dev/null 2>&1; then
           echo "$(date): K3s agent process is running"
@@ -66,10 +64,8 @@ write_files:
       echo "$(date): Verifying K3s agent is running..."
       systemctl status k3s-agent --no-pager || true
       
-      echo "$(date): K3s agent setup complete"
-      echo "$(date): Node will appear in cluster shortly"
-      echo "$(date): To label this node, run from control plane:"
-      echo "  kubectl label node $(hostname) workload=kafka"
+      echo "$(date): K3s worker agent setup complete"
+      echo "$(date): Node labels: role=worker, workload=apps"
       
       touch /root/k3s-agent-ready.txt
       echo "$(date): Cloud-init completed successfully"

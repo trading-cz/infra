@@ -61,6 +61,25 @@ output "kafka_server_ids" {
 }
 
 # ============================================
+# Worker Server Outputs
+# ============================================
+
+output "worker_server_public_ips" {
+  description = "Public IPv4 addresses of worker servers"
+  value       = [for server in module.worker_server : server.ipv4_address]
+}
+
+output "worker_server_private_ips" {
+  description = "Private IP addresses of worker servers"
+  value       = [for server in module.worker_server : server.private_ip]
+}
+
+output "worker_server_ids" {
+  description = "Server IDs of worker servers"
+  value       = [for server in module.worker_server : server.server_id]
+}
+
+# ============================================
 # Access Information
 # ============================================
 
@@ -72,8 +91,9 @@ output "kubeconfig_command" {
 output "ssh_access" {
   description = "SSH access information"
   value = {
-    k3s_control = "ssh root@${module.k3s_control.ipv4_address}"
-    kafka_nodes = [for ip in module.kafka_server : "ssh root@${ip.ipv4_address}"]
+    k3s_control  = "ssh root@${module.k3s_control.ipv4_address}"
+    kafka_nodes  = [for ip in module.kafka_server : "ssh root@${ip.ipv4_address}"]
+    worker_nodes = [for ip in module.worker_server : "ssh root@${ip.ipv4_address}"]
   }
 }
 
@@ -90,7 +110,9 @@ output "cluster_summary" {
     network_cidr       = var.network_cidr
     k3s_version        = var.k3s_version
     kafka_node_count   = var.kafka_node_count
+    worker_node_count  = var.worker_node_count
     control_plane_type = var.control_plane_server_type
     kafka_server_type  = var.kafka_server_type
+    worker_server_type = var.worker_server_type
   }
 }

@@ -93,6 +93,18 @@ variable "kafka_node_count" {
   }
 }
 
+variable "worker_server_type" {
+  description = "Server type for worker nodes (Python apps/strategies)"
+  type        = string
+  default     = "cx22"
+}
+
+variable "worker_node_count" {
+  description = "Number of worker nodes for Python applications"
+  type        = number
+  default     = 0
+}
+
 # ============================================
 # Network Configuration
 # ============================================

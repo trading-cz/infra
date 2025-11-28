@@ -24,23 +24,27 @@ Deploy cost-optimized Kubernetes infrastructure for algorithmic trading:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         Hetzner Cloud (nbg1)                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  k3s-control (cx23)                                                         │
-│  ├─ Primary IP #1 (Persistent)    Private: 10.0.1.10                        │
-│  ├─ K3s server (control plane)                                              │
-│  ├─ Traefik Ingress (30080/30443)                                           │
-│  ├─ ArgoCD Operator                                                         │
-│  └─ Strimzi Operator                                                        │
+│  k3s-control (cx23)              │ role=control-plane                       │
+│  ├─ Primary IP #1 (Persistent)   │ Private: 10.0.1.10                       │
+│  ├─ K3s server (control plane)   │ ArgoCD, Traefik, Strimzi Operator        │
+│  └─ Reserved for: monitoring     │ NO application workloads                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  kafka-0 (cx23)          │  kafka-1 (cx23)       │  kafka-2 (cx23)          │
 │  ├─ Primary IP #2        │  ├─ Ephemeral IP      │  ├─ Ephemeral IP         │
 │  ├─ Private: 10.0.1.20   │  ├─ Private: .21      │  ├─ Private: .22         │
 │  ├─ K3s agent            │  ├─ K3s agent         │  ├─ K3s agent            │
-│  ├─ NodePort: 30002      │  └─ Internal Kafka    │  └─ Internal Kafka       │
-│  └─ External Kafka       │                       │                          │
+│  ├─ role=kafka           │  ├─ role=kafka        │  ├─ role=kafka           │
+│  ├─ workload=mixed       │  ├─ workload=mixed    │  ├─ workload=mixed       │
+│  └─ Kafka + apps overflow│  └─ Kafka + apps      │  └─ Kafka + apps         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  worker-0 (cx22)                                                            │
+│  ├─ Ephemeral IP                 │ Private: 10.0.1.30                       │
+│  ├─ K3s agent                    │ role=worker, workload=apps               │
+│  └─ PRIMARY target for Python apps (strategies, ingestion)                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  Private Network: 10.0.1.0/24                                               │
 │  All nodes communicate internally via private IPs                           │
-│  kafka-0 has persistent IP for external access, kafka-1/2 have ephemeral IPs│
+│  kafka-0 has persistent IP for external access, others have ephemeral IPs   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -50,6 +54,18 @@ Deploy cost-optimized Kubernetes infrastructure for algorithmic trading:
 
 **Internal Access** (from pods):
 - **Kafka Bootstrap**: `trading-cluster-kafka-bootstrap.kafka:9092`
+
+## Cost Summary
+
+| Resource | Type | Monthly Cost |
+|----------|------|--------------|
+| k3s-control | cx23 (2 vCPU, 4GB) | €7.49 |
+| kafka-0,1,2 | cx23 x3 | €22.47 |
+| worker-0 | cx22 (2 vCPU, 4GB) | €3.99 |
+| Primary IPs | x2 (control + kafka-0) | €2.00 |
+| **Total** | 5 VMs | **~€35.95/month** |
+
+> **Note**: With ephemeral clusters (2-10h/day), actual costs are ~58% lower.
 
 ## Private Network IP Allocation
 
@@ -64,19 +80,57 @@ Range                │ Purpose              │ Current Use
                      │ (K3s servers)        │ .11-.19 = future HA
 ───────────────────────────────────────────────────────────────
 10.0.1.20  - .29     │ KAFKA BROKERS        │ .20 = kafka-0 (public)
-                     │                      │ .21 = kafka-1
+                     │ (workload=mixed)     │ .21 = kafka-1
                      │                      │ .22 = kafka-2
 ───────────────────────────────────────────────────────────────
-10.0.1.30  - .49     │ INFRASTRUCTURE       │ Future: monitoring,
+10.0.1.30  - .49     │ WORKER NODES         │ .30 = worker-0 (apps)
+                     │ (workload=apps)      │ .31-.49 = future workers
+───────────────────────────────────────────────────────────────
+10.0.1.50  - .99     │ INFRASTRUCTURE       │ Future: monitoring,
                      │ SERVICES             │ logging, bastion
 ───────────────────────────────────────────────────────────────
-10.0.1.50  - .99     │ EXPANSION            │ Reserved
-───────────────────────────────────────────────────────────────
-10.0.1.100 - .199    │ APPLICATIONS         │ .100 = app-0
-                     │ (100 slots)          │ .101 = app-1, etc.
+10.0.1.100 - .199    │ EXPANSION            │ Reserved
 ───────────────────────────────────────────────────────────────
 10.0.1.200 - .254    │ DHCP / DYNAMIC       │ Not used
 ═══════════════════════════════════════════════════════════════
+```
+
+## Node Labels & Workload Scheduling
+
+| Node Type | Labels | Workloads |
+|-----------|--------|----------|
+| control | `role=control-plane` | ArgoCD, Traefik, Strimzi operator, monitoring |
+| kafka-N | `role=kafka`, `workload=mixed` | Kafka brokers + overflow apps |
+| worker-N | `role=worker`, `workload=apps` | Python strategies, ingestion apps (primary) |
+
+**Scheduling Strategy**:
+- Apps prefer `role=worker` nodes (dedicated resources)
+- Apps can fall back to `role=kafka` nodes (`workload=mixed`)
+- Control plane excluded from app scheduling
+
+**Example Deployment Selector** (for Python strategies):
+```yaml
+spec:
+  template:
+    spec:
+      nodeSelector:
+        role: worker  # Primary target
+      # OR for flexibility:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: role
+                operator: In
+                values: [worker]
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: workload
+                operator: In
+                values: [mixed]
 ```
 
 ## Tech Stack
@@ -103,17 +157,18 @@ Range                │ Purpose              │ Current Use
 
 ```
 infra/
-├── main.tf                 # Root module: network, k3s-server, kafka-server
+├── main.tf                 # Root module: network, k3s-server, kafka-server, worker-server
 ├── variables.tf            # All configurable variables
 ├── outputs.tf              # Cluster IPs, SSH commands, summary
 ├── versions.tf             # Terraform/provider versions
 ├── environments/
-│   ├── dev.tfvars          # Dev: 3 kafka nodes (KRaft quorum)
-│   └── prod.tfvars         # Prod: 3 kafka nodes (KRaft quorum)
+│   ├── dev.tfvars          # Dev: 3 kafka nodes + 1 worker (cx22)
+│   └── prod.tfvars         # Prod: 3 kafka nodes + 1 worker (cx22)
 ├── modules/
 │   ├── network/            # VPC, subnet, firewall rules
 │   ├── k3s-server/         # Control plane + cloud-init (K3s, Helm, Traefik)
-│   ├── kafka-server/       # K3s agent nodes + cloud-init (internal only for kafka-1,2)
+│   ├── kafka-server/       # K3s agent nodes (role=kafka, workload=mixed)
+│   ├── worker-server/      # K3s agent nodes for Python apps (role=worker, workload=apps)
 │   └── strimzi/            # Strimzi Helm values (reference only)
 └── .github/
     ├── workflows/              # GitHub Actions workflow definitions
@@ -193,6 +248,9 @@ C:\projects\apps\terraform_1.13.4\terraform.exe plan -var-file="environments/dev
 5. **NodePort services**: ArgoCD (30443), Kafka (30002) - no LoadBalancer needed
 6. **3-node Kafka cluster**: KRaft quorum requires minimum 3 brokers for HA
 7. **Only kafka-0 has public IP**: kafka-1 and kafka-2 are internal-only (no public IP)
+8. **Worker nodes for apps**: Dedicated cx22 nodes for Python strategies (role=worker, workload=apps)
+9. **Kafka nodes allow apps**: Kafka nodes labeled `workload=mixed` for overflow app scheduling
+10. **Control plane reserved**: No application workloads on control plane (reserved for ArgoCD + future monitoring)
 
 ## Scaling Kafka Clusters
 
