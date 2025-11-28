@@ -1,0 +1,219 @@
+# View Application Logs
+# Connect to K3s cluster and view logs of a deployed application
+# Useful for debugging deployments synced via ArgoCD
+#
+# Usage:
+#   1. First run with action=list to see namespaces and apps
+#   2. Then run with action=logs and specify namespace/app_label
+
+name: View App Logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment (dev/prod)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+        default: 'dev'
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - list
+          - logs
+        default: 'list'
+      namespace:
+        description: 'Kubernetes namespace (for logs action)'
+        required: false
+        type: string
+        default: 'default'
+      app_label:
+        description: 'App label selector (for logs action, e.g., app=ingestion-alpaca)'
+        required: false
+        type: string
+        default: ''
+      tail_lines:
+        description: 'Number of log lines to show'
+        required: false
+        type: string
+        default: '100'
+
+jobs:
+  k8s-ops:
+    name: K8s Operations
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Get Control Plane IP from Hetzner
+        id: ip
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          ENV="${{ inputs.environment }}"
+          CLUSTER="k3s-trading"
+          CONTROL_NAME="${ENV}-${CLUSTER}-control"
+          
+          echo "🔍 Looking for server: $CONTROL_NAME"
+          
+          # Get control plane IP
+          CONTROL_IP=$(hcloud server list -o noheader -o columns=name,ipv4 | grep "$CONTROL_NAME" | awk '{print $2}')
+          
+          if [ -z "$CONTROL_IP" ]; then
+            echo "❌ Control plane server '$CONTROL_NAME' not found!"
+            echo ""
+            echo "Available servers:"
+            hcloud server list -o columns=name,ipv4,status
+            exit 1
+          fi
+          
+          echo "✅ Found control plane: $CONTROL_IP"
+          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+
+      - name: Download Kubeconfig
+        run: |
+          CONTROL_IP="${{ steps.ip.outputs.control_ip }}"
+          mkdir -p ~/.kube
+          
+          echo "📥 Downloading kubeconfig from $CONTROL_IP..."
+          for i in {1..5}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
+              sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
+              chmod 600 ~/.kube/config
+              echo "✅ Kubeconfig downloaded"
+              break
+            fi
+            echo "⚠️ Retry $i/5..."
+            sleep 5
+          done
+
+      - name: Verify cluster connectivity
+        run: |
+          echo "🔍 Checking cluster connectivity..."
+          kubectl cluster-info
+          kubectl get nodes
+
+      # ========== LIST ACTION ==========
+      - name: List all namespaces and apps
+        if: ${{ inputs.action == 'list' }}
+        run: |
+          echo "========================================="
+          echo "  K8s Cluster Overview (${{ inputs.environment }})"
+          echo "========================================="
+          echo ""
+          
+          echo "📦 NAMESPACES:"
+          echo "─────────────────────────────────────────"
+          kubectl get namespaces
+          echo ""
+          
+          echo "🚀 ALL PODS (all namespaces):"
+          echo "─────────────────────────────────────────"
+          kubectl get pods -A -o wide
+          echo ""
+          
+          echo "📋 DEPLOYMENTS (all namespaces):"
+          echo "─────────────────────────────────────────"
+          kubectl get deployments -A
+          echo ""
+          
+          echo "🏷️  PODS WITH APP LABELS:"
+          echo "─────────────────────────────────────────"
+          echo "Use these values for 'app_label' input:"
+          echo ""
+          kubectl get pods -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,APP_LABEL:.metadata.labels.app,STATUS:.status.phase' | grep -v '<none>' || echo "No pods with 'app' label found"
+          echo ""
+          
+          echo "📊 SERVICES:"
+          echo "─────────────────────────────────────────"
+          kubectl get services -A
+          echo ""
+          
+          echo "========================================="
+          echo "💡 To view logs, run again with:"
+          echo "   action: logs"
+          echo "   namespace: <from list above>"
+          echo "   app_label: app=<app-name>"
+          echo "========================================="
+
+      # ========== LOGS ACTION ==========
+      - name: Validate logs parameters
+        if: ${{ inputs.action == 'logs' }}
+        run: |
+          if [ -z "${{ inputs.app_label }}" ]; then
+            echo "❌ ERROR: app_label is required for logs action"
+            echo ""
+            echo "💡 Run with action=list first to see available apps"
+            exit 1
+          fi
+
+      - name: Find pods for logs
+        if: ${{ inputs.action == 'logs' }}
+        id: pods
+        run: |
+          NAMESPACE="${{ inputs.namespace }}"
+          LABEL="${{ inputs.app_label }}"
+          
+          echo "🔍 Looking for pods with label '$LABEL' in namespace '$NAMESPACE'..."
+          
+          PODS=$(kubectl get pods -n "$NAMESPACE" -l "$LABEL" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+          
+          if [ -z "$PODS" ]; then
+            echo "❌ No pods found with label '$LABEL' in namespace '$NAMESPACE'"
+            echo ""
+            echo "📋 Available pods in namespace '$NAMESPACE':"
+            kubectl get pods -n "$NAMESPACE" -o wide || true
+            echo ""
+            echo "💡 Run with action=list to see all available apps"
+            exit 1
+          fi
+          
+          echo "✅ Found pods: $PODS"
+
+      - name: Show pod status
+        if: ${{ inputs.action == 'logs' }}
+        run: |
+          NAMESPACE="${{ inputs.namespace }}"
+          LABEL="${{ inputs.app_label }}"
+          
+          echo "📊 Pod status:"
+          kubectl get pods -n "$NAMESPACE" -l "$LABEL" -o wide
+          echo ""
+          echo "📊 Pod events:"
+          kubectl describe pods -n "$NAMESPACE" -l "$LABEL" | grep -A 20 "Events:" || true
+
+      - name: View logs
+        if: ${{ inputs.action == 'logs' }}
+        run: |
+          NAMESPACE="${{ inputs.namespace }}"
+          LABEL="${{ inputs.app_label }}"
+          TAIL="${{ inputs.tail_lines }}"
+          
+          echo ""
+          echo "📜 Logs (last $TAIL lines):"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          kubectl logs -n "$NAMESPACE" -l "$LABEL" --tail="$TAIL" --all-containers=true 2>&1 || echo "No logs available"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Log output complete"
