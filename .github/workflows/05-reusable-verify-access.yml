@@ -79,14 +79,20 @@ jobs:
         continue-on-error: true
         run: |
           echo "🐘 Checking Kafka Broker at ${{ inputs.kafka_ip }}:30002..."
-          # -L: Metadata list mode
-          # -b: Broker list
-          # -t: Topic (optional, but here used incorrectly as timeout in previous version)
-          # Correct usage: -T (timeout in ms) is not a standard flag for kcat in all versions, 
-          # but usually it's -m <timeout> for metadata timeout.
-          # However, the user's log shows "Metadata for 5000", which means `5000` was interpreted as a topic name.
           
-          # We will use a simple metadata list command without the confusing argument.
+          # Wait for Entity Operator to create topics (may take 30-60s after Kafka is ready)
+          echo "⏳ Waiting for Kafka topics to be created by Entity Operator..."
+          for i in {1..12}; do
+            TOPICS=$(kcat -L -b "${{ inputs.kafka_ip }}:30002" 2>/dev/null | grep "topic" | grep -v "Metadata" || true)
+            if echo "$TOPICS" | grep -q "event"; then
+              echo "✅ Topic 'event' found!"
+              break
+            fi
+            echo "Waiting for topics... ($i/12)"
+            sleep 10
+          done
+          
+          # Final metadata check
           if kcat -L -b "${{ inputs.kafka_ip }}:30002"; then
             echo "✅ Kafka Broker is accessible externally!"
           else
