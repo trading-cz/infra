@@ -29,14 +29,9 @@ on:
         default: 'list'
       namespace:
         description: 'Kubernetes namespace (for logs action)'
-        required: false
+        required: true
         type: string
         default: 'default'
-      app_label:
-        description: 'App label selector (for logs action, e.g., app=ingestion-alpaca)'
-        required: false
-        type: string
-        default: ''
       tail_lines:
         description: 'Number of log lines to show'
         required: false
@@ -162,10 +157,10 @@ jobs:
       - name: Validate logs parameters
         if: ${{ inputs.action == 'logs' }}
         run: |
-          if [ -z "${{ inputs.app_label }}" ]; then
-            echo "❌ ERROR: app_label is required for logs action"
+          if [ -z "${{ inputs.namespace }}" ]; then
+            echo "❌ ERROR: namespace is required for logs action"
             echo ""
-            echo "💡 Run with action=list first to see available apps"
+            echo "💡 Run with action=list first to see available namespaces"
             exit 1
           fi
 
@@ -174,14 +169,13 @@ jobs:
         id: pods
         run: |
           NAMESPACE="${{ inputs.namespace }}"
-          LABEL="${{ inputs.app_label }}"
-          
-          echo "🔍 Looking for pods with label '$LABEL' in namespace '$NAMESPACE'..."
-          
-          PODS=$(kubectl get pods -n "$NAMESPACE" -l "$LABEL" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-          
+
+          echo "🔍 Looking for pods in namespace '$NAMESPACE'..."
+
+          PODS=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
           if [ -z "$PODS" ]; then
-            echo "❌ No pods found with label '$LABEL' in namespace '$NAMESPACE'"
+            echo "❌ No pods found in namespace '$NAMESPACE'"
             echo ""
             echo "📋 Listing all available pods across all namespaces:"
             echo "─────────────────────────────────────────"
@@ -191,35 +185,51 @@ jobs:
             echo "─────────────────────────────────────────"
             kubectl get namespaces
             echo ""
-            echo "💡 Tip: Use the correct namespace and app label from the list above"
-            echo "   Example: namespace=ingestion-alpaca, app_label=app=ingestion-alpaca"
+            echo "💡 Tip: Use the correct namespace from the list above"
+            echo "   Example: namespace=ingestion-alpaca"
             exit 1
           fi
-          
+
           echo "✅ Found pods: $PODS"
 
       - name: Show pod status
         if: ${{ inputs.action == 'logs' }}
         run: |
           NAMESPACE="${{ inputs.namespace }}"
-          LABEL="${{ inputs.app_label }}"
-          
+
           echo "📊 Pod status:"
-          kubectl get pods -n "$NAMESPACE" -l "$LABEL" -o wide
+          kubectl get pods -n "$NAMESPACE" -o wide
           echo ""
           echo "📊 Pod events:"
-          kubectl describe pods -n "$NAMESPACE" -l "$LABEL" | grep -A 20 "Events:" || true
+          kubectl describe pods -n "$NAMESPACE" | grep -A 20 "Events:" || true
 
-      - name: View logs
+      - name: View last log message per pod/container
         if: ${{ inputs.action == 'logs' }}
         run: |
+          set -e
           NAMESPACE="${{ inputs.namespace }}"
-          LABEL="${{ inputs.app_label }}"
           TAIL="${{ inputs.tail_lines }}"
-          
+
           echo ""
-          echo "📜 Logs (last $TAIL lines):"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          kubectl logs -n "$NAMESPACE" -l "$LABEL" --tail="$TAIL" --all-containers=true 2>&1 || echo "No logs available"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📜 Last log message for pods in namespace '$NAMESPACE' (tail=$TAIL per container):"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          PODS=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}')
+
+          for POD in $PODS; do
+            echo "─────────────────────────────────────────────────"
+            echo "Pod: $POD"
+            # list containers for the pod
+            CONTAINERS=$(kubectl get pod -n "$NAMESPACE" "$POD" -o jsonpath='{.spec.containers[*].name}')
+            for C in $CONTAINERS; do
+              echo "  Container: $C"
+              # show last line(s) for the container; suppress error if no logs
+              if ! kubectl logs -n "$NAMESPACE" "$POD" -c "$C" --tail="$TAIL" 2>/dev/null | sed -n "1,${TAIL}p"; then
+                echo "    (no logs available)"
+              fi
+              echo ""
+            done
+          done
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "✅ Log output complete"
