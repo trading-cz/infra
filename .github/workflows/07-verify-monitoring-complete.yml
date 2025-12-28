@@ -27,6 +27,13 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+          hcloud version
+
       - name: Install kubectl
         run: |
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
@@ -36,18 +43,24 @@ jobs:
       - name: Get Control Plane IP (from Hetzner API if not provided)
         id: get_ip
         if: ${{ !inputs.control_plane_ip }}
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
-          HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
           ENV="${{ inputs.environment }}"
+          CLUSTER="k3s-trading"
           
           echo "📡 Fetching control plane IP from Hetzner Cloud..."
-          CONTROL_IP=$(curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
-            https://api.hetzner.cloud/v1/servers | \
-            jq -r ".servers[] | select(.name | contains(\"k3s-control-$ENV\")) | .public_net.ipv4.ip" | \
-            head -1)
+          # Query by server name pattern: {env}-{cluster}-control
+          CONTROL_NAME="${ENV}-${CLUSTER}-control"
+          echo "   Looking for server: $CONTROL_NAME"
+          
+          CONTROL_IP=$(hcloud server list -o noheader -o columns=name,ipv4 | grep "^$CONTROL_NAME " | awk '{print $2}' | head -1)
           
           if [ -z "$CONTROL_IP" ]; then
-            echo "❌ Could not find control plane IP in Hetzner Cloud"
+            echo "❌ Could not find control plane server '$CONTROL_NAME' in Hetzner Cloud"
+            echo ""
+            echo "Available servers:"
+            hcloud server list -o noheader -o columns=name,ipv4
             exit 1
           fi
           
@@ -275,27 +288,120 @@ jobs:
         if: ${{ steps.grafana_check.outputs.ready == 'true' }}
         continue-on-error: true
         run: |
-          echo "🔍 Checking Grafana connectivity..."
+          echo "🔍 Checking Grafana connectivity from external host..."
           
-          # Port-forward to Grafana
-          kubectl port-forward -n monitoring svc/grafana-service 3000:80 &
+          CONTROL_IP="${{ steps.control_ip.outputs.ip }}"
+          
+          # Method 1: Port-forward via SSH (remote port-forward)
+          echo "📡 Setting up SSH port-forward to Grafana..."
+          ssh -o StrictHostKeyChecking=no -N -L 3000:127.0.0.1:3000 root@$CONTROL_IP &
+          PF_PID=$!
           sleep 3
           
-          # Check Grafana health
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health)
+          # Method 2: Check if Grafana is accessible via port-forward
+          echo "🌐 Testing Grafana HTTP health check..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -k http://localhost:3000/api/health 2>/dev/null || echo "000")
+          
           if [ "$HTTP_STATUS" == "200" ]; then
-            echo "✅ Grafana API is healthy"
+            echo "✅ Grafana HTTP API is healthy (status: $HTTP_STATUS)"
           else
-            echo "⚠️  Grafana API returned status $HTTP_STATUS"
+            echo "⚠️  Grafana HTTP returned status: $HTTP_STATUS"
           fi
           
-          # Check datasources
-          DATASOURCES=$(curl -s -u admin:admin-dev-123 http://localhost:3000/api/datasources 2>/dev/null | jq 'length' || echo "0")
-          if [ "$DATASOURCES" -gt 0 ]; then
-            echo "✅ Grafana has $DATASOURCES datasource(s)"
+          # Method 3: Test Grafana login
+          echo "🔐 Testing Grafana login..."
+          LOGIN_RESPONSE=$(curl -s -X POST http://localhost:3000/api/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"user":"admin","password":"admin-dev-123"}' 2>/dev/null)
+          
+          TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.token' 2>/dev/null)
+          
+          if [ "$TOKEN" != "null" ] && [ -n "$TOKEN" ]; then
+            echo "✅ Grafana login successful!"
+            echo "   Token: ${TOKEN:0:20}..."
+            LOGIN_SUCCESS=true
+          else
+            echo "❌ Grafana login failed"
+            echo "   Response: $LOGIN_RESPONSE"
+            LOGIN_SUCCESS=false
+          fi
+          echo "login_success=$LOGIN_SUCCESS" >> $GITHUB_OUTPUT
+          
+          # Method 4: Check datasources (requires auth)
+          if [ "$LOGIN_SUCCESS" == "true" ]; then
+            echo ""
+            echo "📊 Checking Grafana datasources..."
+            DATASOURCES=$(curl -s -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/datasources)
+            DATASOURCE_COUNT=$(echo "$DATASOURCES" | jq 'length' 2>/dev/null || echo "0")
+            
+            if [ "$DATASOURCE_COUNT" -gt 0 ]; then
+              echo "✅ Grafana has $DATASOURCE_COUNT datasource(s):"
+              echo "$DATASOURCES" | jq '.[] | {name: .name, type: .type, url: .url}' | head -20
+            else
+              echo "⚠️  No datasources found in Grafana"
+            fi
+            
+            # Check dashboards
+            echo ""
+            echo "📈 Checking Grafana dashboards..."
+            DASHBOARDS=$(curl -s -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/search)
+            DASHBOARD_COUNT=$(echo "$DASHBOARDS" | jq 'length' 2>/dev/null || echo "0")
+            
+            if [ "$DASHBOARD_COUNT" -gt 0 ]; then
+              echo "✅ Grafana has $DASHBOARD_COUNT dashboard(s):"
+              echo "$DASHBOARDS" | jq '.[] | {title: .title, uid: .uid}' | head -20
+            else
+              echo "⚠️  No dashboards found in Grafana"
+            fi
           fi
           
-          pkill -f "port-forward" || true
+          # Cleanup port-forward
+          kill $PF_PID 2>/dev/null || true
+          sleep 1
+
+      - name: Verify External Grafana Access (alternative method)
+        id: grafana_external
+        if: ${{ steps.grafana_check.outputs.ready == 'true' }}
+        continue-on-error: true
+        run: |
+          echo "🔍 Verifying Grafana is accessible from external host..."
+          
+          CONTROL_IP="${{ steps.control_ip.outputs.ip }}"
+          
+          # Check if Grafana service is exposed (NodePort or LoadBalancer)
+          echo "📋 Checking Grafana service type and ports..."
+          kubectl get svc -n monitoring grafana-service -o wide
+          
+          SERVICE_TYPE=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.spec.type}')
+          echo "   Service Type: $SERVICE_TYPE"
+          
+          if [ "$SERVICE_TYPE" == "NodePort" ]; then
+            NODE_PORT=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.spec.ports[0].nodePort}')
+            echo "✅ NodePort exposed: $NODE_PORT"
+            echo "   Access via: http://$CONTROL_IP:$NODE_PORT"
+          elif [ "$SERVICE_TYPE" == "LoadBalancer" ]; then
+            EXTERNAL_IP=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            echo "✅ LoadBalancer IP: $EXTERNAL_IP"
+            echo "   Access via: http://$EXTERNAL_IP:3000"
+          else
+            echo "ℹ️  Service type is $SERVICE_TYPE (ClusterIP)"
+            echo "   Use port-forward or Ingress for external access"
+          fi
+          
+          # Check Ingress
+          echo ""
+          echo "📡 Checking Grafana Ingress..."
+          INGRESS=$(kubectl get ingress -n monitoring 2>/dev/null)
+          if [ -n "$INGRESS" ]; then
+            echo "✅ Ingress configured:"
+            kubectl get ingress -n monitoring -o wide
+            
+            INGRESS_HOSTS=$(kubectl get ingress -n monitoring -o jsonpath='{.items[*].spec.rules[*].host}')
+            echo "   Hosts: $INGRESS_HOSTS"
+            echo "   Note: Ensure DNS or /etc/hosts points to: $CONTROL_IP"
+          else
+            echo "⚠️  No Ingress found (using port-forward method)"
+          fi
 
       - name: Generate Summary Report
         run: |
@@ -331,10 +437,21 @@ jobs:
           echo ""
           echo "Grafana:"
           if [ "${{ steps.grafana_check.outputs.ready }}" == "true" ]; then
-            echo "  ✅ Grafana is ready"
-            echo "  🌐 Web UI: https://grafana-dev.local:3000"
-            echo "  👤 User: admin"
-            echo "  🔑 Password: admin-dev-123 (from ${{ inputs.environment }} overlay)"
+            echo "  ✅ Grafana instance is ready"
+            if [ "${{ steps.grafana_connectivity.outputs.login_success }}" == "true" ]; then
+              echo "  ✅ Login test successful"
+            else
+              echo "  ⏳ Login test pending or failed"
+            fi
+            echo ""
+            echo "  🌐 Web UI Access:"
+            echo "     • Hostname: https://grafana-dev.local:3000 (from overlay)"
+            echo "     • IP + Port: Check Ingress/Service config below"
+            echo "     • SSH Tunnel: ssh -L 3000:127.0.0.1:3000 root@${{ steps.control_ip.outputs.ip }}"
+            echo ""
+            echo "  👤 Credentials:"
+            echo "     User: admin"
+            echo "     Password: admin-dev-123 (dev), check prod overlay for prod"
           else
             echo "  ⏳ Grafana is starting (wait 1-2 minutes)"
           fi
@@ -356,14 +473,32 @@ jobs:
           echo "─────────────────────────────────────────────────────────────────"
           echo ""
           if [ "${{ steps.grafana_check.outputs.ready }}" == "true" ]; then
-            echo "1. ✅ Access Grafana:"
-            echo "   https://grafana-dev.local:3000"
+            echo "✅ Grafana is running!"
             echo ""
-            echo "2. ✅ View Dashboards:"
-            echo "   - Kafka Broker Metrics"
-            echo "   - K3s Cluster Health"
+            echo "🔐 LOGIN VERIFIED: ${{ steps.grafana_connectivity.outputs.login_success }}"
             echo ""
-            echo "3. ⏳ Wait 2-3 minutes for Prometheus to collect metrics"
+            echo "📥 To access Grafana from external host:"
+            echo ""
+            echo "Option 1 - SSH Port-Forward (recommended):"
+            echo "  ssh -L 3000:127.0.0.1:3000 root@${{ steps.control_ip.outputs.ip }}"
+            echo "  Then open: http://localhost:3000"
+            echo ""
+            echo "Option 2 - Check Ingress/Service:"
+            kubectl get svc,ingress -n monitoring -o wide | awk '{print "  " $0}'
+            echo ""
+            echo "Option 3 - Check /etc/hosts and use hostname:"
+            echo "  Add to /etc/hosts: ${{ steps.control_ip.outputs.ip }} grafana-dev.local"
+            echo "  Then open: https://grafana-dev.local:3000"
+            echo ""
+            echo "👤 Credentials (dev):"
+            echo "  User: admin"
+            echo "  Password: admin-dev-123"
+            echo ""
+            echo "📊 Available Dashboards:"
+            echo "  • Kafka Broker Metrics"
+            echo "  • K3s Cluster Health"
+            echo ""
+            echo "⏳ Prometheus metrics may take 2-3 minutes to appear"
             echo ""
           else
             echo "1. ⏳ Wait for Grafana to start (1-2 minutes)"
@@ -371,10 +506,10 @@ jobs:
             echo ""
           fi
           
-          echo "📊 For detailed status:"
-          echo "   kubectl get pods -n monitoring"
-          echo "   kubectl get servicemonitors -n monitoring"
-          echo "   kubectl get grafanadashboards -n monitoring"
+          echo "📊 For detailed troubleshooting:"
+          echo "   kubectl get pods -n monitoring -o wide"
+          echo "   kubectl logs -n monitoring -l app.kubernetes.io/name=grafana"
+          echo "   kubectl describe pod -n monitoring -l app.kubernetes.io/name=grafana"
           echo ""
 
       - name: Fail if Critical Components Missing
