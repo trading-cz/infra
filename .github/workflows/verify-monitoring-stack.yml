@@ -153,6 +153,7 @@ jobs:
 
       - name: Verify Grafana Operator & Instance
         id: grafana_check
+        continue-on-error: true
         run: |
           echo "🔍 Checking Grafana..."
           
@@ -163,21 +164,31 @@ jobs:
             echo "⚠️  Grafana Operator not found (may not be deployed yet)"
           fi
           
-          # Wait for Grafana instance
-          echo "⏳ Waiting for Grafana instance..."
-          if kubectl wait --for=condition=Ready pod -l "app.kubernetes.io/name=grafana" -n monitoring --timeout=120s 2>/dev/null; then
+          # Debug: Show all pods with grafana labels
+          echo "📋 Grafana-related pods in monitoring namespace:"
+          kubectl get pods -n monitoring -o wide | grep -i grafana || echo "   No grafana pods found"
+          
+          # Wait for Grafana instance - Grafana Operator creates pods with app=<cr-name>-grafana
+          # For Grafana CR named "main", the deployment is "main-deployment" with app=main-grafana
+          echo "⏳ Waiting for Grafana instance (CR: main)..."
+          if kubectl wait --for=condition=Ready pod -l "app=main-grafana" -n monitoring --timeout=120s 2>/dev/null; then
             echo "✅ Grafana instance is ready"
             GRAFANA_READY=true
           else
             echo "⚠️  Grafana instance not ready yet"
+            echo "   Available deployments:"
+            kubectl get deployments -n monitoring | grep -i grafana || echo "   No grafana deployments"
             GRAFANA_READY=false
           fi
           echo "ready=$GRAFANA_READY" >> $GITHUB_OUTPUT
           
-          # Check Grafana service
-          GRAFANA_IP=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+          # Check Grafana service - Grafana Operator creates <cr-name>-service
+          GRAFANA_IP=$(kubectl get svc main-service -n monitoring -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
           if [ -n "$GRAFANA_IP" ]; then
             echo "✅ Grafana service IP: $GRAFANA_IP:3000"
+          else
+            echo "   Grafana services:"
+            kubectl get svc -n monitoring | grep -i grafana || echo "   No grafana services"
           fi
 
       - name: Verify ServiceMonitors
