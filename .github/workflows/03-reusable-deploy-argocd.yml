@@ -160,7 +160,7 @@ jobs:
           # Wait for Grafana CRDs (up to 3 minutes)
           echo "Waiting for Grafana CRDs..."
           for i in {1..90}; do
-            if kubectl get crd grafanas.grafana.integreatly.com &>/dev/null; then
+          if kubectl get crd grafanas.grafana.integreatly.org 2>/dev/null; then
               echo "✅ Grafana CRDs available"
               break
             fi
@@ -168,7 +168,7 @@ jobs:
             sleep 2
           done
           
-          if ! kubectl get crd grafanas.grafana.integreatly.com &>/dev/null; then
+          if ! kubectl get crd grafanas.grafana.integreatly.org &>/dev/null; then
             echo "❌ Grafana CRDs NOT found after 3 minutes!"
             echo "Available CRDs:"
             kubectl get crd | grep -i grafana || echo "No grafana CRDs found"
