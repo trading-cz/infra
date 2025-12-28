@@ -14,6 +14,7 @@ override.tf.json
 terraform.rc
 .terraform.lock.hcl
 downloaded-doc
+
 # SSH keys
 *.pem
 *.key
@@ -34,7 +35,6 @@ Thumbs.db
 
 # Logs
 *.log
-*.md
 
 # Backup files
 *.backup
