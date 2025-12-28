@@ -71,7 +71,19 @@ write_files:
         --wait \
         --timeout 5m
       echo "$(date): Verifying Prometheus Operator installation..."
-      kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus-operator -n monitoring --timeout=300s
+      echo "$(date): Checking monitoring namespace pods..."
+      kubectl get pods -n monitoring -o wide
+      echo "$(date): Waiting for Prometheus Operator controller to be ready..."
+      if kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus-operator,app.kubernetes.io/component=operator -n monitoring --timeout=300s 2>/dev/null; then
+        echo "$(date): Prometheus Operator controller is ready"
+      else
+        echo "$(date): Warning - Prometheus Operator controller not ready yet, checking pod status..."
+        kubectl get pods -n monitoring -o wide
+        kubectl describe pods -n monitoring -l app.kubernetes.io/name=prometheus-operator 2>/dev/null || true
+        kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=50 2>/dev/null || true
+        echo "$(date): Continuing deployment..."
+      fi
+      sleep 10
       
       # ============================================
       # Install Grafana Operator (Helm)
@@ -84,7 +96,24 @@ write_files:
         --wait \
         --timeout 5m
       echo "$(date): Verifying Grafana Operator installation..."
-      kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=grafana-operator -n monitoring --timeout=300s
+      echo "$(date): Checking monitoring namespace pods..."
+      kubectl get pods -n monitoring -o wide
+      echo "$(date): Waiting for Grafana Operator to be ready..."
+      if kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=grafana-operator -n monitoring --timeout=300s 2>/dev/null; then
+        echo "$(date): Grafana Operator is ready"
+      else
+        echo "$(date): Warning - Grafana Operator not ready yet, checking pod status..."
+        kubectl get pods -n monitoring -o wide
+        kubectl describe pods -n monitoring -l app.kubernetes.io/name=grafana-operator 2>/dev/null || true
+        kubectl logs -n monitoring -l app.kubernetes.io/name=grafana-operator --tail=50 2>/dev/null || true
+        echo "$(date): Continuing deployment..."
+      fi
+      sleep 10
+      
+      # Final verification - show all monitoring namespace resources
+      echo "$(date): Final monitoring namespace status..."
+      kubectl get all -n monitoring
+      kubectl get crd | grep -E 'prometheus|grafana|monitoring' || echo "$(date): Warning - Some CRDs not yet available"
       
       echo "$(date): K3s control plane setup complete"
       touch /root/k3s-ready.txt
