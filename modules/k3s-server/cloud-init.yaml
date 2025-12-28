@@ -55,6 +55,37 @@ write_files:
         --set ports.websecure.nodePort=30443 \
         --set service.type=NodePort
       
+      # ============================================
+      # Install Prometheus Operator (Helm)
+      # ============================================
+      echo "$(date): Installing Prometheus Operator v0.77.0..."
+      helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      helm repo update
+      helm install prometheus-operator prometheus-community/kube-prometheus-stack \
+        --namespace monitoring \
+        --create-namespace \
+        --set prometheus.prometheusSpec.retention=30d \
+        --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=20Gi \
+        --set grafana.enabled=false \
+        --set alertmanager.enabled=false \
+        --wait \
+        --timeout 5m
+      echo "$(date): Verifying Prometheus Operator installation..."
+      kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus-operator -n monitoring --timeout=300s
+      
+      # ============================================
+      # Install Grafana Operator (Helm)
+      # ============================================
+      echo "$(date): Installing Grafana Operator v5.21.3..."
+      helm repo add grafana https://grafana.github.io/helm-charts
+      helm repo update
+      helm install grafana-operator grafana/grafana-operator \
+        --namespace monitoring \
+        --wait \
+        --timeout 5m
+      echo "$(date): Verifying Grafana Operator installation..."
+      kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=grafana-operator -n monitoring --timeout=300s
+      
       echo "$(date): K3s control plane setup complete"
       touch /root/k3s-ready.txt
       
