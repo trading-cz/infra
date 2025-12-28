@@ -52,15 +52,6 @@ jobs:
         run: |
           echo "🔍 Checking Prometheus Operator in monitoring namespace..."
           
-          # Wait for prometheus-operator pod to be ready
-          echo "⏳ Waiting for Prometheus Operator pod..."
-          if kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus-operator -n monitoring --timeout=300s 2>/dev/null; then
-            echo "✅ Prometheus Operator pod is Ready"
-          else
-            echo "⚠️ Prometheus Operator pod not ready within timeout"
-            exit 1
-          fi
-          
           # Check if monitoring namespace exists
           if kubectl get namespace monitoring &>/dev/null; then
             echo "✅ Monitoring namespace exists"
@@ -69,18 +60,35 @@ jobs:
             exit 1
           fi
           
-          # Check all monitoring pods
-          echo "📊 Monitoring Namespace Pods:"
+          # Debug: Show all pods in monitoring namespace
+          echo "📊 All Monitoring Namespace Pods:"
           kubectl get pods -n monitoring -o wide
           
-          # Verify key components
-          REQUIRED_COMPONENTS=("prometheus-operator" "kube-state-metrics" "prometheus-node-exporter")
+          # Debug: Show all pod labels
+          echo "📋 Pod Labels in monitoring namespace:"
+          kubectl get pods -n monitoring --show-labels
+          
+          # Wait for prometheus operator pods (kube-prometheus-stack pattern)
+          echo "⏳ Waiting for Prometheus Operator controller pod..."
+          # kube-prometheus-stack deploys as "prometheus-operator-kube-p-operator-*"
+          if kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=prometheus-operator,app.kubernetes.io/component=operator -n monitoring --timeout=60s 2>/dev/null; then
+            echo "✅ Prometheus Operator controller is Ready"
+          else
+            echo "⚠️ Prometheus Operator controller pod not ready"
+            # Try alternative label selector
+            kubectl wait --for=condition=Ready pod -n monitoring -l app.kubernetes.io/part-of=prometheus-operator --timeout=30s 2>/dev/null || true
+          fi
+          
+          # Check all critical monitoring components
+          echo "🔧 Checking Prometheus Stack Components:"
+          REQUIRED_COMPONENTS=("prometheus-operator" "kube-state-metrics" "prometheus-node-exporter" "prometheus")
           for component in "${REQUIRED_COMPONENTS[@]}"; do
-            if kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" --no-headers 2>/dev/null | grep -q "Running"; then
-              echo "✅ $component is Running"
+            COUNT=$(kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+            if [ "$COUNT" -gt 0 ]; then
+              echo "✅ $component: $COUNT pod(s) Running"
             else
-              echo "⚠️ $component pod status:"
-              kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" --no-headers || echo "   Not found"
+              echo "⚠️ $component: not found or not running"
+              kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" 2>/dev/null || echo "   No pods with that label"
             fi
           done
 
@@ -109,38 +117,77 @@ jobs:
         run: |
           echo "📋 Checking Custom Resource Definitions..."
           
-          REQUIRED_CRDS=(
-            "prometheus.coreos.com"
-            "prometheusrules.coreos.com"
-            "servicemonitors.coreos.com"
-            "podmonitors.coreos.com"
+          # kube-prometheus-stack registers CRDs with monitoring.coreos.com group
+          # Debug: Show actual CRDs
+          echo "🔍 All monitoring.coreos.com CRDs:"
+          kubectl get crd | grep -E "monitoring\.coreos\.com|grafana\.integreatly\.org" || echo "No CRDs found"
+          
+          # Check for Prometheus CRDs (with monitoring.coreos.com group)
+          PROMETHEUS_CRDS=(
+            "prometheuses.monitoring.coreos.com"
+            "prometheusrules.monitoring.coreos.com"
+            "servicemonitors.monitoring.coreos.com"
+            "podmonitors.monitoring.coreos.com"
+          )
+          
+          echo "🔧 Prometheus Stack CRDs:"
+          PROM_READY=true
+          for crd in "${PROMETHEUS_CRDS[@]}"; do
+            if kubectl get crd "$crd" &>/dev/null; then
+              echo "✅ CRD $crd exists"
+            else
+              echo "❌ CRD $crd not found"
+              PROM_READY=false
+            fi
+          done
+          
+          # Check for Grafana CRDs
+          GRAFANA_CRDS=(
             "grafanas.grafana.integreatly.org"
             "grafanadatasources.grafana.integreatly.org"
             "grafanadashboards.grafana.integreatly.org"
           )
           
-          for crd in "${REQUIRED_CRDS[@]}"; do
+          echo "🔧 Grafana CRDs:"
+          GRAFANA_READY=true
+          for crd in "${GRAFANA_CRDS[@]}"; do
             if kubectl get crd "$crd" &>/dev/null; then
               echo "✅ CRD $crd exists"
             else
               echo "❌ CRD $crd not found"
+              GRAFANA_READY=false
             fi
           done
+          
+          # If Prometheus CRDs missing, capture more debug info
+          if [ "$PROM_READY" = false ]; then
+            echo "🔍 Prometheus Operator pod status:"
+            kubectl get pods -n monitoring -l app.kubernetes.io/name=prometheus-operator -o wide
+            echo "🔍 Prometheus Operator pod events:"
+            kubectl describe pod -n monitoring -l app.kubernetes.io/name=prometheus-operator 2>/dev/null || echo "No pods found"
+          fi
 
       - name: Check Operator Logs
         if: always()
         continue-on-error: true
         run: |
           echo "::group::Prometheus Operator Logs"
-          kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=30 || echo "No logs found"
+          kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=50 || echo "No logs found for prometheus-operator label"
+          echo "---"
+          echo "Trying all prometheus-operator pods:"
+          kubectl logs -n monitoring -l app.kubernetes.io/part-of=prometheus-operator --tail=20 2>/dev/null || echo "No logs found"
           echo "::endgroup::"
           
           echo "::group::Grafana Operator Logs"
-          kubectl logs -n monitoring -l app.kubernetes.io/name=grafana-operator --tail=30 || echo "No logs found"
+          kubectl logs -n monitoring -l app.kubernetes.io/name=grafana-operator --tail=50 || echo "No logs found"
           echo "::endgroup::"
           
           echo "::group::kube-state-metrics Logs"
-          kubectl logs -n monitoring -l app.kubernetes.io/name=kube-state-metrics --tail=30 || echo "No logs found"
+          kubectl logs -n monitoring -l app.kubernetes.io/name=kube-state-metrics --tail=50 || echo "No logs found"
+          echo "::endgroup::"
+          
+          echo "::group::All Pod Details"
+          kubectl get pods -n monitoring -o yaml
           echo "::endgroup::"
 
       - name: Summary
