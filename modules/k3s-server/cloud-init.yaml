@@ -73,17 +73,28 @@ write_files:
       echo "$(date): Verifying Prometheus Operator installation..."
       echo "$(date): Checking monitoring namespace pods..."
       kubectl get pods -n monitoring -o wide
+      echo "$(date): Checking Prometheus Operator deployment..."
+      kubectl describe deployment -n monitoring prometheus-operator 2>/dev/null || true
       echo "$(date): Waiting for Prometheus Operator controller to be ready..."
-      if kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus-operator,app.kubernetes.io/component=operator -n monitoring --timeout=300s 2>/dev/null; then
+      # kube-prometheus-stack creates pod with label: app.kubernetes.io/name=prometheus-operator
+      if kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=prometheus-operator -n monitoring --timeout=60s 2>/dev/null; then
         echo "$(date): Prometheus Operator controller is ready"
       else
-        echo "$(date): Warning - Prometheus Operator controller not ready yet, checking pod status..."
-        kubectl get pods -n monitoring -o wide
-        kubectl describe pods -n monitoring -l app.kubernetes.io/name=prometheus-operator 2>/dev/null || true
-        kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=50 2>/dev/null || true
-        echo "$(date): Continuing deployment..."
+        echo "$(date): Waiting for pod deployment..."
+        # Check if deployment exists and pod is pending
+        if kubectl get deployment -n monitoring prometheus-operator 2>/dev/null; then
+          echo "$(date): Deployment exists, checking pod events..."
+          kubectl describe pod -n monitoring -l app.kubernetes.io/name=prometheus-operator 2>/dev/null || true
+          # Check for image pull or node resource issues
+          kubectl get events -n monitoring --sort-by='.lastTimestamp' --field-selector=type!=Normal 2>/dev/null || true
+          echo "$(date): Waiting additional 30s for pod to start..."
+          sleep 30
+        else
+          echo "$(date): Warning - Prometheus Operator deployment not found"
+        fi
+        kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=50 2>/dev/null || echo "No operator logs yet"
       fi
-      sleep 10
+      sleep 5
       
       # ============================================
       # Install Grafana Operator (Helm)
