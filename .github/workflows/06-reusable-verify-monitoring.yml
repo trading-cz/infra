@@ -1,0 +1,193 @@
+name: '06 Reusable: Verify Monitoring Operators'
+
+on:
+  workflow_call:
+    inputs:
+      control_plane_ip:
+        description: 'Control Plane IP'
+        required: true
+        type: string
+    secrets:
+      ssh_private_key:
+        description: 'SSH private key for server access'
+        required: true
+
+jobs:
+  verify-monitoring:
+    name: Verify Monitoring Stack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ssh_private_key }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Download Kubeconfig
+        run: |
+          CONTROL_IP="${{ inputs.control_plane_ip }}"
+          mkdir -p ~/.kube
+          
+          echo "📥 Downloading kubeconfig from $CONTROL_IP..."
+          for i in {1..5}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
+              sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
+              chmod 600 ~/.kube/config
+              echo "✅ Kubeconfig downloaded"
+              break
+            fi
+            echo "⚠️ Retry $i/5..."
+            sleep 5
+          done
+
+      - name: Verify Prometheus Operator
+        id: prometheus
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking Prometheus Operator in monitoring namespace..."
+          
+          # Wait for prometheus-operator pod to be ready
+          echo "⏳ Waiting for Prometheus Operator pod..."
+          if kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus-operator -n monitoring --timeout=300s 2>/dev/null; then
+            echo "✅ Prometheus Operator pod is Ready"
+          else
+            echo "⚠️ Prometheus Operator pod not ready within timeout"
+            exit 1
+          fi
+          
+          # Check if monitoring namespace exists
+          if kubectl get namespace monitoring &>/dev/null; then
+            echo "✅ Monitoring namespace exists"
+          else
+            echo "❌ Monitoring namespace not found"
+            exit 1
+          fi
+          
+          # Check all monitoring pods
+          echo "📊 Monitoring Namespace Pods:"
+          kubectl get pods -n monitoring -o wide
+          
+          # Verify key components
+          REQUIRED_COMPONENTS=("prometheus-operator" "kube-state-metrics" "prometheus-node-exporter")
+          for component in "${REQUIRED_COMPONENTS[@]}"; do
+            if kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" --no-headers 2>/dev/null | grep -q "Running"; then
+              echo "✅ $component is Running"
+            else
+              echo "⚠️ $component pod status:"
+              kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" --no-headers || echo "   Not found"
+            fi
+          done
+
+      - name: Verify Grafana Operator
+        id: grafana
+        continue-on-error: true
+        run: |
+          echo "🎨 Checking Grafana Operator in monitoring namespace..."
+          
+          # Wait for grafana-operator pod to be ready
+          echo "⏳ Waiting for Grafana Operator pod..."
+          if kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=grafana-operator -n monitoring --timeout=300s 2>/dev/null; then
+            echo "✅ Grafana Operator pod is Ready"
+          else
+            echo "⚠️ Grafana Operator pod not ready within timeout"
+            exit 1
+          fi
+          
+          # Check operator pod details
+          echo "📊 Grafana Operator Pod Details:"
+          kubectl get pods -n monitoring -l app.kubernetes.io/name=grafana-operator -o wide
+
+      - name: Verify CRDs
+        id: crds
+        continue-on-error: true
+        run: |
+          echo "📋 Checking Custom Resource Definitions..."
+          
+          REQUIRED_CRDS=(
+            "prometheus.coreos.com"
+            "prometheusrules.coreos.com"
+            "servicemonitors.coreos.com"
+            "podmonitors.coreos.com"
+            "grafanas.grafana.integreatly.org"
+            "grafanadatasources.grafana.integreatly.org"
+            "grafanadashboards.grafana.integreatly.org"
+          )
+          
+          for crd in "${REQUIRED_CRDS[@]}"; do
+            if kubectl get crd "$crd" &>/dev/null; then
+              echo "✅ CRD $crd exists"
+            else
+              echo "❌ CRD $crd not found"
+            fi
+          done
+
+      - name: Check Operator Logs
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "::group::Prometheus Operator Logs"
+          kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=30 || echo "No logs found"
+          echo "::endgroup::"
+          
+          echo "::group::Grafana Operator Logs"
+          kubectl logs -n monitoring -l app.kubernetes.io/name=grafana-operator --tail=30 || echo "No logs found"
+          echo "::endgroup::"
+          
+          echo "::group::kube-state-metrics Logs"
+          kubectl logs -n monitoring -l app.kubernetes.io/name=kube-state-metrics --tail=30 || echo "No logs found"
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "========================================"
+          echo "  Monitoring Operators Verification"
+          echo "========================================"
+          
+          FAILED=false
+          
+          if [ "${{ steps.prometheus.outcome }}" == "success" ]; then
+            echo "✅ Prometheus Operator:  Ready"
+          else
+            echo "❌ Prometheus Operator:  FAILED"
+            FAILED=true
+          fi
+          
+          if [ "${{ steps.grafana.outcome }}" == "success" ]; then
+            echo "✅ Grafana Operator:     Ready"
+          else
+            echo "❌ Grafana Operator:     FAILED"
+            FAILED=true
+          fi
+          
+          if [ "${{ steps.crds.outcome }}" == "success" ]; then
+            echo "✅ CRDs:                 Deployed"
+          else
+            echo "⚠️  CRDs:                 Some missing"
+            FAILED=true
+          fi
+          
+          echo "========================================"
+          echo ""
+          echo "📊 **Monitoring Stack Status:**"
+          echo "- **Prometheus Operator**: Scrapes K3s, Kafka, & apps"
+          echo "- **Grafana Operator**: Manages dashboards as code"
+          echo "- **kube-state-metrics**: K8s object metrics"
+          echo "- **node-exporter**: Node-level metrics"
+          echo ""
+          echo "⏭️  **Next Steps:**"
+          echo "1. Deploy Prometheus instance (config/base/monitoring/)"
+          echo "2. Deploy Grafana instance (config/base/monitoring/)"
+          echo "3. Create ServiceMonitors for scrape targets"
+          echo "4. Create GrafanaDashboards for visualization"
+          echo "========================================"
+          
+          if [ "$FAILED" = true ]; then
+            exit 1
+          fi
