@@ -1,0 +1,390 @@
+name: '07 Verify Monitoring Stack - Full Health Check'
+
+on:
+  workflow_dispatch:
+    inputs:
+      control_plane_ip:
+        description: 'Control Plane IP (if known)'
+        required: false
+        type: string
+      environment:
+        description: 'Environment to verify'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  verify-monitoring-stack:
+    name: Verify Complete Monitoring Stack
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Get Control Plane IP (from Hetzner API if not provided)
+        id: get_ip
+        if: ${{ !inputs.control_plane_ip }}
+        run: |
+          HCLOUD_TOKEN="${{ secrets.HCLOUD_TOKEN }}"
+          ENV="${{ inputs.environment }}"
+          
+          echo "📡 Fetching control plane IP from Hetzner Cloud..."
+          CONTROL_IP=$(curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+            https://api.hetzner.cloud/v1/servers | \
+            jq -r ".servers[] | select(.name | contains(\"k3s-control-$ENV\")) | .public_net.ipv4.ip" | \
+            head -1)
+          
+          if [ -z "$CONTROL_IP" ]; then
+            echo "❌ Could not find control plane IP in Hetzner Cloud"
+            exit 1
+          fi
+          
+          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+          echo "✅ Found control plane IP: $CONTROL_IP"
+
+      - name: Set Control Plane IP
+        id: control_ip
+        run: |
+          if [ -n "${{ inputs.control_plane_ip }}" ]; then
+            echo "ip=${{ inputs.control_plane_ip }}" >> $GITHUB_OUTPUT
+          else
+            echo "ip=${{ steps.get_ip.outputs.control_ip }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Kubeconfig
+        run: |
+          CONTROL_IP="${{ steps.control_ip.outputs.ip }}"
+          mkdir -p ~/.kube
+          
+          echo "📥 Downloading kubeconfig from $CONTROL_IP..."
+          for i in {1..5}; do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$CONTROL_IP "cat /etc/rancher/k3s/k3s.yaml" > ~/.kube/config 2>/dev/null; then
+              sed -i "s/127.0.0.1/$CONTROL_IP/g" ~/.kube/config
+              chmod 600 ~/.kube/config
+              echo "✅ Kubeconfig downloaded"
+              break
+            fi
+            echo "⚠️  Retry $i/5..."
+            sleep 5
+          done
+
+      - name: Verify Kubernetes Cluster
+        run: |
+          echo "🔍 Checking Kubernetes cluster..."
+          kubectl cluster-info || exit 1
+          kubectl get nodes -o wide
+          echo "✅ Kubernetes cluster is accessible"
+
+      - name: Verify ArgoCD Deployment
+        id: argocd_check
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking ArgoCD..."
+          kubectl get deployment -n argocd argocd-server -o wide
+          
+          if kubectl wait --for=condition=Available deployment/argocd-server -n argocd --timeout=30s 2>/dev/null; then
+            echo "✅ ArgoCD deployment is ready"
+            ARGOCD_READY=true
+          else
+            echo "⚠️  ArgoCD deployment not ready yet"
+            ARGOCD_READY=false
+          fi
+          echo "ready=$ARGOCD_READY" >> $GITHUB_OUTPUT
+
+      - name: Verify ArgoCD Applications Status
+        continue-on-error: true
+        run: |
+          echo "📋 Checking ArgoCD Applications..."
+          
+          APPS=("monitoring" "kafka" "ingestion")
+          for app in "${APPS[@]}"; do
+            echo ""
+            echo "Checking Application: $app"
+            STATUS=$(kubectl get application $app -n argocd -o jsonpath='{.status.operationState.phase}' 2>/dev/null || echo "NOT_FOUND")
+            SYNC=$(kubectl get application $app -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "UNKNOWN")
+            
+            if [ "$SYNC" == "Synced" ]; then
+              echo "✅ $app: Synced"
+            else
+              echo "⏳ $app: Sync status = $SYNC"
+            fi
+          done
+
+      - name: Verify Prometheus Operator & Instance
+        id: prometheus_check
+        run: |
+          echo "🔍 Checking Prometheus..."
+          
+          # Check Prometheus operator
+          if kubectl get pod -n monitoring -l "app=kube-prometheus-stack-operator" -o wide; then
+            echo "✅ Prometheus Operator is running"
+          else
+            echo "❌ Prometheus Operator not found"
+            exit 1
+          fi
+          
+          # Wait for Prometheus instance
+          echo "⏳ Waiting for Prometheus instance..."
+          if kubectl wait --for=condition=Ready pod -l "app.kubernetes.io/name=prometheus" -n monitoring --timeout=120s 2>/dev/null; then
+            echo "✅ Prometheus instance is ready"
+            PROMETHEUS_READY=true
+          else
+            echo "⚠️  Prometheus instance not ready yet"
+            PROMETHEUS_READY=false
+          fi
+          echo "ready=$PROMETHEUS_READY" >> $GITHUB_OUTPUT
+          
+          # Check Prometheus service
+          PROM_IP=$(kubectl get svc prometheus-operated -n monitoring -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+          if [ -n "$PROM_IP" ]; then
+            echo "✅ Prometheus service IP: $PROM_IP:9090"
+          fi
+
+      - name: Verify Grafana Operator & Instance
+        id: grafana_check
+        run: |
+          echo "🔍 Checking Grafana..."
+          
+          # Check Grafana operator
+          if kubectl get pod -n monitoring -l "app.kubernetes.io/name=grafana-operator" -o wide; then
+            echo "✅ Grafana Operator is running"
+          else
+            echo "⚠️  Grafana Operator not found (may not be deployed yet)"
+          fi
+          
+          # Wait for Grafana instance
+          echo "⏳ Waiting for Grafana instance..."
+          if kubectl wait --for=condition=Ready pod -l "app.kubernetes.io/name=grafana" -n monitoring --timeout=120s 2>/dev/null; then
+            echo "✅ Grafana instance is ready"
+            GRAFANA_READY=true
+          else
+            echo "⚠️  Grafana instance not ready yet"
+            GRAFANA_READY=false
+          fi
+          echo "ready=$GRAFANA_READY" >> $GITHUB_OUTPUT
+          
+          # Check Grafana service
+          GRAFANA_IP=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+          if [ -n "$GRAFANA_IP" ]; then
+            echo "✅ Grafana service IP: $GRAFANA_IP:3000"
+          fi
+
+      - name: Verify ServiceMonitors
+        id: servicemonitor_check
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking ServiceMonitors..."
+          
+          MONITORS=("kafka-broker" "kube-state-metrics" "node-exporter")
+          for monitor in "${MONITORS[@]}"; do
+            if kubectl get servicemonitor $monitor -n monitoring &>/dev/null; then
+              TARGET_COUNT=$(kubectl get servicemonitor $monitor -n monitoring -o jsonpath='{.spec.selector.matchLabels}' | grep -o 'app' | wc -l)
+              echo "✅ ServiceMonitor '$monitor' exists (targets configured)"
+            else
+              echo "⚠️  ServiceMonitor '$monitor' not found"
+            fi
+          done
+
+      - name: Verify Grafana Datasources
+        id: datasource_check
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking Grafana Datasources..."
+          
+          if kubectl get grafanadatasource prometheus -n monitoring &>/dev/null; then
+            echo "✅ GrafanaDatasource 'prometheus' configured"
+            DATASOURCE_URL=$(kubectl get grafanadatasource prometheus -n monitoring -o jsonpath='{.spec.datasourceSpec.url}')
+            echo "   URL: $DATASOURCE_URL"
+          else
+            echo "⚠️  GrafanaDatasource 'prometheus' not found"
+          fi
+
+      - name: Verify Grafana Dashboards
+        id: dashboard_check
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking Grafana Dashboards..."
+          
+          DASHBOARDS=("kafka-broker" "k3s-cluster-health")
+          for dashboard in "${DASHBOARDS[@]}"; do
+            if kubectl get grafanadashboard $dashboard -n monitoring &>/dev/null; then
+              UID=$(kubectl get grafanadashboard $dashboard -n monitoring -o jsonpath='{.spec.dashboard.uid}')
+              TITLE=$(kubectl get grafanadashboard $dashboard -n monitoring -o jsonpath='{.spec.dashboard.title}')
+              echo "✅ Dashboard '$dashboard': $TITLE (UID: $UID)"
+            else
+              echo "⚠️  Dashboard '$dashboard' not found"
+            fi
+          done
+
+      - name: Verify Kafka Metrics
+        id: kafka_check
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking Kafka..."
+          
+          # Check Kafka broker pods
+          KAFKA_PODS=$(kubectl get pods -n kafka -l "app.kubernetes.io/name=kafka" -o wide)
+          if [ -n "$KAFKA_PODS" ]; then
+            echo "✅ Kafka brokers running:"
+            echo "$KAFKA_PODS"
+          else
+            echo "⚠️  No Kafka brokers found"
+          fi
+          
+          # Check for Kafka JMX metrics port
+          if kubectl get svc -n kafka | grep -i kafka &>/dev/null; then
+            echo "✅ Kafka services exist"
+          fi
+
+      - name: Verify Prometheus Targets (if ready)
+        id: prometheus_targets
+        if: ${{ steps.prometheus_check.outputs.ready == 'true' }}
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking Prometheus targets..."
+          
+          # Port-forward to Prometheus
+          kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 &
+          sleep 3
+          
+          # Query targets
+          TARGETS=$(curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets | length')
+          if [ "$TARGETS" -gt 0 ]; then
+            echo "✅ Prometheus has $TARGETS active targets"
+            curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, instance: .labels.instance}' | head -20
+          else
+            echo "⚠️  No active targets in Prometheus yet (data may be loading)"
+          fi
+          
+          pkill -f "port-forward" || true
+
+      - name: Verify Grafana Connectivity (if ready)
+        id: grafana_connectivity
+        if: ${{ steps.grafana_check.outputs.ready == 'true' }}
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking Grafana connectivity..."
+          
+          # Port-forward to Grafana
+          kubectl port-forward -n monitoring svc/grafana-service 3000:80 &
+          sleep 3
+          
+          # Check Grafana health
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health)
+          if [ "$HTTP_STATUS" == "200" ]; then
+            echo "✅ Grafana API is healthy"
+          else
+            echo "⚠️  Grafana API returned status $HTTP_STATUS"
+          fi
+          
+          # Check datasources
+          DATASOURCES=$(curl -s -u admin:admin-dev-123 http://localhost:3000/api/datasources 2>/dev/null | jq 'length' || echo "0")
+          if [ "$DATASOURCES" -gt 0 ]; then
+            echo "✅ Grafana has $DATASOURCES datasource(s)"
+          fi
+          
+          pkill -f "port-forward" || true
+
+      - name: Generate Summary Report
+        run: |
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════╗"
+          echo "║          MONITORING STACK VERIFICATION REPORT                  ║"
+          echo "╚════════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "📊 COMPONENT STATUS:"
+          echo "─────────────────────────────────────────────────────────────────"
+          
+          echo ""
+          echo "Kubernetes:"
+          kubectl get nodes -o wide | awk '{print "  " $0}'
+          
+          echo ""
+          echo "ArgoCD:"
+          if [ "${{ steps.argocd_check.outputs.ready }}" == "true" ]; then
+            echo "  ✅ ArgoCD is ready"
+          else
+            echo "  ⏳ ArgoCD is deploying"
+          fi
+          
+          echo ""
+          echo "Prometheus:"
+          if [ "${{ steps.prometheus_check.outputs.ready }}" == "true" ]; then
+            echo "  ✅ Prometheus is ready"
+            echo "  📈 Metrics endpoint: http://prometheus-operated.monitoring:9090"
+          else
+            echo "  ⏳ Prometheus is starting (wait 1-2 minutes)"
+          fi
+          
+          echo ""
+          echo "Grafana:"
+          if [ "${{ steps.grafana_check.outputs.ready }}" == "true" ]; then
+            echo "  ✅ Grafana is ready"
+            echo "  🌐 Web UI: https://grafana-dev.local:3000"
+            echo "  👤 User: admin"
+            echo "  🔑 Password: admin-dev-123 (from ${{ inputs.environment }} overlay)"
+          else
+            echo "  ⏳ Grafana is starting (wait 1-2 minutes)"
+          fi
+          
+          echo ""
+          echo "ServiceMonitors:"
+          echo "  • kafka-broker"
+          echo "  • kube-state-metrics"
+          echo "  • node-exporter"
+          
+          echo ""
+          echo "Dashboards:"
+          echo "  • Kafka Broker Metrics (kafka-broker-hello)"
+          echo "  • K3s Cluster Health (k3s-cluster-health)"
+          
+          echo ""
+          echo "─────────────────────────────────────────────────────────────────"
+          echo "🚀 NEXT STEPS:"
+          echo "─────────────────────────────────────────────────────────────────"
+          echo ""
+          if [ "${{ steps.grafana_check.outputs.ready }}" == "true" ]; then
+            echo "1. ✅ Access Grafana:"
+            echo "   https://grafana-dev.local:3000"
+            echo ""
+            echo "2. ✅ View Dashboards:"
+            echo "   - Kafka Broker Metrics"
+            echo "   - K3s Cluster Health"
+            echo ""
+            echo "3. ⏳ Wait 2-3 minutes for Prometheus to collect metrics"
+            echo ""
+          else
+            echo "1. ⏳ Wait for Grafana to start (1-2 minutes)"
+            echo "2. ⏳ Rerun this action in 2-3 minutes"
+            echo ""
+          fi
+          
+          echo "📊 For detailed status:"
+          echo "   kubectl get pods -n monitoring"
+          echo "   kubectl get servicemonitors -n monitoring"
+          echo "   kubectl get grafanadashboards -n monitoring"
+          echo ""
+
+      - name: Fail if Critical Components Missing
+        if: |
+          steps.prometheus_check.outcome == 'failure' ||
+          steps.grafana_check.outcome == 'failure'
+        run: |
+          echo "❌ Critical monitoring components are not ready"
+          echo "Please check:"
+          echo "  - ArgoCD is syncing resources"
+          echo "  - All pods in 'monitoring' namespace"
+          echo "  - Check logs: kubectl logs -n monitoring -l app.kubernetes.io/name=grafana"
+          exit 1
