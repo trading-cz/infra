@@ -350,43 +350,54 @@ jobs:
         if: ${{ steps.grafana_check.outputs.ready == 'true' }}
         continue-on-error: true
         run: |
-          echo "🔍 Verifying Grafana is accessible from external host..."
+          echo "🔍 Verifying Grafana Ingress and Traefik routing..."
           
           CONTROL_IP="${{ steps.control_ip.outputs.ip }}"
           
-          # Check if Grafana service is exposed (NodePort or LoadBalancer)
-          echo "📋 Checking Grafana service type and ports..."
-          kubectl get svc -n monitoring grafana-service -o wide
-          
-          SERVICE_TYPE=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.spec.type}')
-          echo "   Service Type: $SERVICE_TYPE"
-          
-          if [ "$SERVICE_TYPE" == "NodePort" ]; then
-            NODE_PORT=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.spec.ports[0].nodePort}')
-            echo "✅ NodePort exposed: $NODE_PORT"
-            echo "   Access via: http://$CONTROL_IP:$NODE_PORT"
-          elif [ "$SERVICE_TYPE" == "LoadBalancer" ]; then
-            EXTERNAL_IP=$(kubectl get svc grafana-service -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            echo "✅ LoadBalancer IP: $EXTERNAL_IP"
-            echo "   Access via: http://$EXTERNAL_IP:3000"
+          # Check if Grafana Ingress exists
+          echo "📋 Checking Grafana Ingress..."
+          if kubectl get ingress -n monitoring grafana -o wide &>/dev/null; then
+            echo "✅ Grafana Ingress exists"
+            kubectl get ingress -n monitoring grafana -o wide
+            
+            INGRESS_NAME=$(kubectl get ingress -n monitoring grafana -o jsonpath='{.metadata.name}' 2>/dev/null)
+            INGRESS_CLASS=$(kubectl get ingress -n monitoring grafana -o jsonpath='{.spec.ingressClassName}' 2>/dev/null)
+            echo "   Ingress Class: $INGRESS_CLASS"
+            
+            # Check routing
+            echo ""
+            echo "📡 Checking Traefik routing for Grafana..."
+            TRAEFIK_ROUTES=$(kubectl get ingressroute -n monitoring -o jsonpath='{.items[?(@.spec.routes[*].match)].metadata.name}' 2>/dev/null || echo "N/A")
+            if [ -n "$TRAEFIK_ROUTES" ]; then
+              echo "✅ Traefik routes configured: $TRAEFIK_ROUTES"
+            fi
           else
-            echo "ℹ️  Service type is $SERVICE_TYPE (ClusterIP)"
-            echo "   Use port-forward or Ingress for external access"
+            echo "⚠️  Grafana Ingress not found"
           fi
           
-          # Check Ingress
+          # Check Traefik service and ports
           echo ""
-          echo "📡 Checking Grafana Ingress..."
-          INGRESS=$(kubectl get ingress -n monitoring 2>/dev/null)
-          if [ -n "$INGRESS" ]; then
-            echo "✅ Ingress configured:"
-            kubectl get ingress -n monitoring -o wide
+          echo "🔌 Checking Traefik NodePort configuration..."
+          TRAEFIK_PORTS=$(kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports}' 2>/dev/null)
+          if [ -n "$TRAEFIK_PORTS" ]; then
+            echo "✅ Traefik service ports:"
+            kubectl get svc traefik -n kube-system -o wide
             
-            INGRESS_HOSTS=$(kubectl get ingress -n monitoring -o jsonpath='{.items[*].spec.rules[*].host}')
-            echo "   Hosts: $INGRESS_HOSTS"
-            echo "   Note: Ensure DNS or /etc/hosts points to: $CONTROL_IP"
-          else
-            echo "⚠️  No Ingress found (using port-forward method)"
+            HTTP_PORT=$(kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}' 2>/dev/null)
+            HTTPS_PORT=$(kubectl get svc traefik -n kube-system -o jsonpath='{.spec.ports[?(@.port==443)].nodePort}' 2>/dev/null)
+            
+            echo ""
+            echo "   HTTP:  port 80  → NodePort :$HTTP_PORT"
+            echo "   HTTPS: port 443 → NodePort :$HTTPS_PORT"
+          fi
+          
+          # Check for port collisions - list all Ingress entries
+          echo ""
+          echo "📊 Checking all Ingress resources (potential routing conflicts)..."
+          INGRESS_COUNT=$(kubectl get ingress -A -o jsonpath='{.items | length}')
+          if [ "$INGRESS_COUNT" -gt 0 ]; then
+            echo "   Found $INGRESS_COUNT Ingress resource(s):"
+            kubectl get ingress -A -o wide | awk 'NR>1 {print "   " $0}'
           fi
 
       - name: Generate Summary Report
@@ -430,10 +441,9 @@ jobs:
               echo "  ⏳ Login test pending or failed"
             fi
             echo ""
-            echo "  🌐 Web UI Access:"
-            echo "     • Hostname: https://grafana-dev.local:3000 (from overlay)"
-            echo "     • IP + Port: Check Ingress/Service config below"
-            echo "     • SSH Tunnel: ssh -L 3000:127.0.0.1:3000 root@${{ steps.control_ip.outputs.ip }}"
+            echo "  🌐 Web UI Access (via Traefik):"
+            echo "     URL: https://${{ steps.control_ip.outputs.ip }}:30443"
+            echo "     (Ignore TLS warnings - self-signed cert)"
             echo ""
             echo "  👤 Credentials:"
             echo "     User: admin"
@@ -459,30 +469,25 @@ jobs:
           echo "─────────────────────────────────────────────────────────────────"
           echo ""
           if [ "${{ steps.grafana_check.outputs.ready }}" == "true" ]; then
-            echo "✅ Grafana is running!"
+            echo "✅ Grafana is running via Traefik!"
             echo ""
-            echo "🔐 LOGIN VERIFIED: ${{ steps.grafana_connectivity.outputs.login_success }}"
+            echo "🌐 Access Grafana:"
             echo ""
-            echo "📥 To access Grafana from external host:"
+            echo "   URL: https://${{ steps.control_ip.outputs.ip }}:30443"
+            echo "   User: admin"
+            echo "   Password: admin-dev-123"
             echo ""
-            echo "Option 1 - SSH Port-Forward (recommended):"
-            echo "  ssh -L 3000:127.0.0.1:3000 root@${{ steps.control_ip.outputs.ip }}"
-            echo "  Then open: http://localhost:3000"
-            echo ""
-            echo "Option 2 - Check Ingress/Service:"
-            kubectl get svc,ingress -n monitoring -o wide | awk '{print "  " $0}'
-            echo ""
-            echo "Option 3 - Check /etc/hosts and use hostname:"
-            echo "  Add to /etc/hosts: ${{ steps.control_ip.outputs.ip }} grafana-dev.local"
-            echo "  Then open: https://grafana-dev.local:3000"
-            echo ""
-            echo "👤 Credentials (dev):"
-            echo "  User: admin"
-            echo "  Password: admin-dev-123"
+            echo "   ⚠️  Self-signed TLS certificate - accept browser warning"
             echo ""
             echo "📊 Available Dashboards:"
-            echo "  • Kafka Broker Metrics"
-            echo "  • K3s Cluster Health"
+            echo "   • Kafka Broker Metrics"
+            echo "   • K3s Cluster Health"
+            echo ""
+            echo "🔌 Routing:"
+            echo "   • Traefik NodePort HTTPS: :30443"
+            echo "   • Traefik NodePort HTTP:  :30080"
+            echo "   • Ingress Class: traefik"
+            echo "   • No hostname collision (IP-based)"
             echo ""
             echo "⏳ Prometheus metrics may take 2-3 minutes to appear"
             echo ""
@@ -492,10 +497,13 @@ jobs:
             echo ""
           fi
           
+          echo "📋 Verify Traefik routing:"
+          echo "   kubectl get ingress -A"
+          echo "   kubectl get ingressroute -A"
+          echo ""
           echo "📊 For detailed troubleshooting:"
           echo "   kubectl get pods -n monitoring -o wide"
           echo "   kubectl logs -n monitoring -l app.kubernetes.io/name=grafana"
-          echo "   kubectl describe pod -n monitoring -l app.kubernetes.io/name=grafana"
           echo ""
 
       - name: Fail if Critical Components Missing
