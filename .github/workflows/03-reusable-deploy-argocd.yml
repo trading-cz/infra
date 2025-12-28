@@ -151,20 +151,91 @@ jobs:
       - name: Debug on Failure
         if: failure()
         run: |
-          echo "❌ ArgoCD Deployment Failed. Dumping State..."
-          echo "::group::ArgoCD Operator Pods"
+          echo "❌ ArgoCD Deployment Failed. Dumping Diagnostic State..."
+          echo ""
+          echo "::group::📋 Kustomize Build Validation"
+          echo "Checking if config overlays are valid..."
+          for overlay in dev prod; do
+            echo ""
+            echo "--- Validating overlay: $overlay ---"
+            if [ -d "config/overlays/$overlay" ]; then
+              echo "Building Kustomize for: overlays/$overlay"
+              kubectl kustomize config/overlays/$overlay > /tmp/kustomize-build-$overlay.yaml 2>&1 || {
+                echo "❌ Kustomize build failed for $overlay"
+                echo "Output:"
+                cat /tmp/kustomize-build-$overlay.yaml
+              }
+            else
+              echo "⚠️  Directory config/overlays/$overlay does not exist"
+            fi
+          done
+          echo "::endgroup::"
+          
+          echo "::group::📁 Config Repository Structure"
+          echo "Checking config repo structure..."
+          find config -type f -name "*.yaml" | head -30
+          echo ""
+          echo "Monitoring folder contents:"
+          ls -la config/base/monitoring/ 2>/dev/null || echo "⚠️  monitoring folder not found"
+          echo ""
+          echo "Dev monitoring overlay contents:"
+          ls -la config/overlays/dev/monitoring/ 2>/dev/null || echo "⚠️  dev/monitoring overlay not found"
+          echo "::endgroup::"
+          
+          echo "::group::🔍 Kustomization Files"
+          echo "Base monitoring kustomization.yaml:"
+          cat config/base/monitoring/kustomization.yaml 2>/dev/null || echo "Not found"
+          echo ""
+          echo "Dev monitoring kustomization.yaml:"
+          cat config/overlays/dev/monitoring/kustomization.yaml 2>/dev/null || echo "Not found"
+          echo ""
+          echo "Dev root kustomization.yaml:"
+          cat config/overlays/dev/kustomization.yaml 2>/dev/null || echo "Not found"
+          echo "::endgroup::"
+          
+          echo "::group::📝 Grafana Patch Files"
+          echo "Dev grafana-patch.yaml:"
+          cat config/overlays/dev/monitoring/grafana-patch.yaml 2>/dev/null || echo "Not found"
+          echo ""
+          echo "Prod grafana-patch.yaml:"
+          cat config/overlays/prod/monitoring/grafana-patch.yaml 2>/dev/null || echo "Not found"
+          echo "::endgroup::"
+          
+          echo "::group::🏗️ ArgoCD Operator State"
           kubectl get pods -n argocd-operator-system -o wide || true
+          echo ""
+          echo "Operator controller logs:"
+          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=100 || true
           echo "::endgroup::"
-          echo "::group::ArgoCD Operator Logs"
-          kubectl logs -n argocd-operator-system -l control-plane=controller-manager --tail=50 || true
-          echo "::endgroup::"
-          echo "::group::ArgoCD Namespace Pods"
+          
+          echo "::group::📦 ArgoCD Instance State"
           kubectl get pods -n argocd -o wide || true
+          echo ""
+          echo "ArgoCD Resources:"
+          kubectl get argocd,applications -n argocd -o wide || true
           echo "::endgroup::"
-          echo "::group::ArgoCD Events"
-          kubectl get events -n argocd --sort-by='.lastTimestamp' || true
+          
+          echo "::group::📊 ArgoCD Events & Errors"
+          echo "Recent events in argocd namespace:"
+          kubectl get events -n argocd --sort-by='.lastTimestamp' --all-namespaces=false | tail -20 || true
+          echo ""
+          echo "ArgoCD server logs:"
+          kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=100 2>/dev/null || echo "Logs not available yet"
           echo "::endgroup::"
-          echo "::group::ArgoCD Server Logs"
-          kubectl logs -n argocd -l app.kubernetes.io/name=trading-argocd-server --tail=50 || true
+          
+          echo "::group::🔐 Application Status"
+          echo "Checking ArgoCD Applications:"
+          kubectl get applications -n argocd -o wide 2>/dev/null || echo "No applications yet"
+          echo ""
+          echo "Monitoring application details:"
+          kubectl describe application monitoring -n argocd 2>/dev/null || echo "Monitoring app not found"
           echo "::endgroup::"
+          
+          echo ""
+          echo "💡 DEBUGGING TIPS:"
+          echo "1. Check kustomize build output above for invalid resource references"
+          echo "2. Verify all patch files have 'namespace' field specified"
+          echo "3. Check patch metadata (name, namespace) matches base resources"
+          echo "4. Review ArgoCD operator logs for CRD validation errors"
+          echo "5. Ensure all referenced resources exist in base/ before patching"
 
