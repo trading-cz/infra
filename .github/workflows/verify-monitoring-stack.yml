@@ -1,12 +1,8 @@
-name: '07 Verify Monitoring Stack - Full Health Check'
+name: 'Verify Monitoring Stack - Full Health Check'
 
 on:
   workflow_dispatch:
     inputs:
-      control_plane_ip:
-        description: 'Control Plane IP (if known)'
-        required: false
-        type: string
       environment:
         description: 'Environment to verify'
         required: true
@@ -40,9 +36,8 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
-      - name: Get Control Plane IP (from Hetzner API if not provided)
-        id: get_ip
-        if: ${{ !inputs.control_plane_ip }}
+      - name: Get Control Plane IP from Hetzner Cloud
+        id: control_ip
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -64,17 +59,8 @@ jobs:
             exit 1
           fi
           
-          echo "control_ip=$CONTROL_IP" >> $GITHUB_OUTPUT
+          echo "ip=$CONTROL_IP" >> $GITHUB_OUTPUT
           echo "✅ Found control plane IP: $CONTROL_IP"
-
-      - name: Set Control Plane IP
-        id: control_ip
-        run: |
-          if [ -n "${{ inputs.control_plane_ip }}" ]; then
-            echo "ip=${{ inputs.control_plane_ip }}" >> $GITHUB_OUTPUT
-          else
-            echo "ip=${{ steps.get_ip.outputs.control_ip }}" >> $GITHUB_OUTPUT
-          fi
 
       - name: Download Kubeconfig
         run: |
