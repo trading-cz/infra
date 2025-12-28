@@ -101,6 +101,22 @@ jobs:
           KAFKA_IP="${{ inputs.kafka_public_ip }}"
           sed -i "s/advertisedHost: .*/advertisedHost: $KAFKA_IP/" config/base/kafka/kafka.yaml
           
+          echo "⏳ Waiting for Operator CRDs (Prometheus, Grafana, Strimzi)..."
+          # Wait for CRDs to be available before applying resources
+          # Prometheus Operator CRDs
+          timeout 120 sh -c 'until kubectl get crd prometheuses.monitoring.coreos.com 2>/dev/null; do echo "waiting for Prometheus CRD..."; sleep 2; done' || {
+            echo "⚠️  Prometheus CRDs not ready, continuing anyway..."
+          }
+          # Grafana Operator CRDs
+          timeout 120 sh -c 'until kubectl get crd grafanas.grafana.integreatly.com 2>/dev/null; do echo "waiting for Grafana CRD..."; sleep 2; done' || {
+            echo "⚠️  Grafana CRDs not ready, continuing anyway..."
+          }
+          # Strimzi Kafka CRDs (should already exist from control plane)
+          timeout 60 sh -c 'until kubectl get crd kafkas.kafka.strimzi.io 2>/dev/null; do echo "waiting for Kafka CRD..."; sleep 2; done' || {
+            echo "⚠️  Kafka CRDs not ready, continuing anyway..."
+          }
+          echo "✅ CRD check complete (may still be installing)"
+          
           echo "🌱 Bootstrapping ArgoCD from Config Repo (${{ inputs.environment }})..."
           # Apply the environment-specific overlay which contains the ArgoCD CR
           kubectl apply -k config/overlays/${{ inputs.environment }}
