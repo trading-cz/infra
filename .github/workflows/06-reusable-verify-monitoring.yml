@@ -70,25 +70,35 @@ jobs:
           
           # Wait for prometheus operator pods (kube-prometheus-stack pattern)
           echo "⏳ Waiting for Prometheus Operator controller pod..."
-          # kube-prometheus-stack deploys as "prometheus-operator-kube-p-operator-*"
-          if kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=prometheus-operator,app.kubernetes.io/component=operator -n monitoring --timeout=60s 2>/dev/null; then
+          # kube-prometheus-stack deploys as "prometheus-operator-kube-p-operator-*" with label app=kube-prometheus-stack-operator
+          if kubectl wait --for=condition=Ready pod -l app=kube-prometheus-stack-operator -n monitoring --timeout=60s 2>/dev/null; then
             echo "✅ Prometheus Operator controller is Ready"
           else
-            echo "⚠️ Prometheus Operator controller pod not ready"
-            # Try alternative label selector
-            kubectl wait --for=condition=Ready pod -n monitoring -l app.kubernetes.io/part-of=prometheus-operator --timeout=30s 2>/dev/null || true
+            echo "⚠️ Prometheus Operator controller not ready yet"
+            kubectl get pods -n monitoring -l app=kube-prometheus-stack-operator -o wide
           fi
           
           # Check all critical monitoring components
           echo "🔧 Checking Prometheus Stack Components:"
-          REQUIRED_COMPONENTS=("prometheus-operator" "kube-state-metrics" "prometheus-node-exporter" "prometheus")
+          REQUIRED_COMPONENTS=("kube-prometheus-stack-prometheus-operator" "kube-state-metrics" "prometheus-node-exporter" "prometheus")
           for component in "${REQUIRED_COMPONENTS[@]}"; do
             COUNT=$(kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
-            if [ "$COUNT" -gt 0 ]; then
+            if [ "$COUNT" -gt 0 ] 2>/dev/null; then
               echo "✅ $component: $COUNT pod(s) Running"
             else
-              echo "⚠️ $component: not found or not running"
-              kubectl get pods -n monitoring -l "app.kubernetes.io/name=$component" 2>/dev/null || echo "   No pods with that label"
+              echo "⚠️ $component: checking alternative labels..."
+              # Try component-specific labels
+              case "$component" in
+                "kube-prometheus-stack-prometheus-operator")
+                  kubectl get pods -n monitoring -l "app=kube-prometheus-stack-operator" --no-headers 2>/dev/null | head -1 && echo "✅ Found via app=kube-prometheus-stack-operator" || echo "   Not found"
+                  ;;
+                "prometheus")
+                  kubectl get pods -n monitoring -l "app.kubernetes.io/name=prometheus" --no-headers 2>/dev/null | head -1 && echo "✅ Found" || echo "   Not found"
+                  ;;
+                *)
+                  echo "   Not found with label app.kubernetes.io/name=$component"
+                  ;;
+              esac
             fi
           done
 
@@ -172,10 +182,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "::group::Prometheus Operator Logs"
-          kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus-operator --tail=50 || echo "No logs found for prometheus-operator label"
-          echo "---"
-          echo "Trying all prometheus-operator pods:"
-          kubectl logs -n monitoring -l app.kubernetes.io/part-of=prometheus-operator --tail=20 2>/dev/null || echo "No logs found"
+          kubectl logs -n monitoring -l app=kube-prometheus-stack-operator --tail=50 2>/dev/null || echo "No logs found"
           echo "::endgroup::"
           
           echo "::group::Grafana Operator Logs"
