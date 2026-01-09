@@ -22,7 +22,7 @@ kafka_node_count          = 3      # 3 nodes minimum for KRaft quorum
 # ============================================
 # Worker Node Configuration (Python Apps)
 # ============================================
-worker_server_type = "cx22" # 2 vCPU, 4GB RAM - budget for prod too
+worker_server_type = "cx23" # 2 vCPU, 4GB RAM - budget for prod too
 worker_node_count  = 1      # Start with 1, scale as needed
 
 # ============================================
