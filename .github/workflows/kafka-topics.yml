@@ -1,0 +1,109 @@
+name: 'Kafka: Browse Topics'
+
+on:
+  workflow_dispatch:
+    inputs:
+      kafka_ip:
+        description: 'Kafka Node IP (external)'
+        required: true
+        type: string
+      topic:
+        description: 'Topic name (empty = all topics)'
+        required: false
+        default: ''
+        type: string
+      offset:
+        description: 'Read from earliest or latest'
+        required: false
+        default: 'latest'
+        type: choice
+        options:
+          - latest
+          - earliest
+      max_messages:
+        description: 'Max messages to read per topic'
+        required: false
+        default: '10'
+        type: string
+
+jobs:
+  browse-topics:
+    name: Browse Kafka Topics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install kcat (kafkacat)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kafkacat
+
+      - name: Browse Topics
+        run: |
+          BROKER="${{ inputs.kafka_ip }}:30002"
+          TOPIC="${{ inputs.topic }}"
+          OFFSET="${{ inputs.offset }}"
+          MAX_MESSAGES="${{ inputs.max_messages }}"
+
+          echo "========================================"
+          echo "  Kafka Topic Browser"
+          echo "  Broker: $BROKER"
+          echo "  Offset: $OFFSET"
+          echo "========================================"
+
+          # Build topic list: either the single provided topic or discover all
+          if [ -n "$TOPIC" ]; then
+            TOPICS="$TOPIC"
+            echo "📌 Using provided topic: $TOPIC"
+          else
+            echo "🔍 Discovering all topics..."
+            TOPICS=$(kcat -L -b "$BROKER" 2>/dev/null | grep '^ topic' | awk '{print $2}' | tr -d '"' | sort)
+            if [ -z "$TOPICS" ]; then
+              echo "❌ No topics found or cannot connect to broker"
+              exit 1
+            fi
+            echo "Found topics:"
+            echo "$TOPICS" | while read -r t; do echo "  - $t"; done
+          fi
+
+          echo ""
+
+          # Iterate over each topic
+          echo "$TOPICS" | while read -r CURRENT_TOPIC; do
+            [ -z "$CURRENT_TOPIC" ] && continue
+
+            echo "========================================"
+            echo "📋 Topic: $CURRENT_TOPIC"
+            echo "========================================"
+
+            # Show topic metadata & offsets
+            echo "--- Partitions & Offsets ---"
+            kcat -L -b "$BROKER" -t "$CURRENT_TOPIC" 2>/dev/null | grep -E 'partition|topic' || true
+
+            echo ""
+            echo "--- Watermark Offsets (low..high per partition) ---"
+            kcat -Q -b "$BROKER" -t "$CURRENT_TOPIC" 2>/dev/null || echo "  (unable to query offsets)"
+
+            echo ""
+            echo "--- Messages (${OFFSET}, max ${MAX_MESSAGES}) ---"
+
+            # Read messages with key, value, timestamp
+            # -o = offset (-1 = latest, -2 = earliest)
+            if [ "$OFFSET" = "earliest" ]; then
+              OFFSET_FLAG="-o beginning"
+            else
+              OFFSET_FLAG="-o end"
+            fi
+
+            # -f format: Timestamp \t Partition \t Offset \t Key \t Value
+            kcat -C -b "$BROKER" -t "$CURRENT_TOPIC" \
+              $OFFSET_FLAG \
+              -c "$MAX_MESSAGES" \
+              -e \
+              -f 'Timestamp: %T  Partition: %p  Offset: %o\nKey:   %k\nValue: %s\n---\n' \
+              2>/dev/null || echo "  (no messages or unable to consume)"
+
+            echo ""
+          done
+
+          echo "========================================"
+          echo "✅ Done"
+          echo "========================================"
