@@ -89,7 +89,7 @@ jobs:
             echo "📌 Using provided topic: $TOPIC"
           else
             echo "🔍 Discovering all topics..."
-            TOPICS=$(kcat -L -b "$BROKER" 2>/dev/null | grep '^ topic' | awk '{print $2}' | tr -d '"' | sort)
+            TOPICS=$(kcat -L -b "$BROKER" 2>/dev/null | grep '^\s*topic ' | awk '{print $2}' | tr -d '"' | sort)
             if [ -z "$TOPICS" ]; then
               echo "❌ No topics found or cannot connect to broker"
               exit 1
