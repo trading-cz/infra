@@ -3,10 +3,14 @@ name: 'Kafka: Browse Topics'
 on:
   workflow_dispatch:
     inputs:
-      kafka_ip:
-        description: 'Kafka Node IP (external)'
+      environment:
+        description: 'Environment (dev/prod)'
         required: true
-        type: string
+        type: choice
+        options:
+          - dev
+          - prod
+        default: 'dev'
       topic:
         description: 'Topic name (empty = all topics)'
         required: false
@@ -31,6 +35,36 @@ jobs:
     name: Browse Kafka Topics
     runs-on: ubuntu-latest
     steps:
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/download/v1.47.0/hcloud-linux-amd64.tar.gz | tar -xz
+          chmod +x hcloud
+          sudo mv hcloud /usr/local/bin/
+
+      - name: Get Kafka-0 External IP from Hetzner Cloud
+        id: kafka_ip
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          ENV="${{ inputs.environment }}"
+          CLUSTER="k3s-trading"
+          KAFKA_NAME="${ENV}-${CLUSTER}-kafka-0"
+
+          echo "🔍 Looking for server: $KAFKA_NAME"
+
+          KAFKA_IP=$(hcloud server list -o noheader -o columns=name,ipv4 | grep "^$KAFKA_NAME " | awk '{print $2}' | head -1)
+
+          if [ -z "$KAFKA_IP" ]; then
+            echo "❌ Could not find kafka server '$KAFKA_NAME' in Hetzner Cloud"
+            echo ""
+            echo "Available servers:"
+            hcloud server list -o columns=name,ipv4,status
+            exit 1
+          fi
+
+          echo "ip=$KAFKA_IP" >> $GITHUB_OUTPUT
+          echo "✅ Found kafka-0 IP: $KAFKA_IP"
+
       - name: Install kcat (kafkacat)
         run: |
           sudo apt-get update
@@ -38,7 +72,7 @@ jobs:
 
       - name: Browse Topics
         run: |
-          BROKER="${{ inputs.kafka_ip }}:30002"
+          BROKER="${{ steps.kafka_ip.outputs.ip }}:30002"
           TOPIC="${{ inputs.topic }}"
           OFFSET="${{ inputs.offset }}"
           MAX_MESSAGES="${{ inputs.max_messages }}"
